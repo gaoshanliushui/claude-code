@@ -171,6 +171,7 @@ import {isUsing3PServices, isClaudeAISubscriber} from './utils/auth.js'
 import {isFirstPartyAnthropicBaseUrl} from './utils/model/providers.js'
 import env from './commands/env/index.js'
 import exit from './commands/exit/index.js'
+import expert from './commands/expert/index.js'
 import exportCommand from './commands/export/index.js'
 import model from './commands/model/index.js'
 import tag from './commands/tag/index.js'
@@ -275,6 +276,7 @@ const COMMANDS = memoize((): Command[] => [
 	doctor,
 	effort,
 	exit,
+	expert,
 	fast,
 	files,
 	heapDump,

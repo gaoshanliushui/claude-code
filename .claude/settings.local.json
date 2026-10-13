@@ -111,7 +111,9 @@
       "Bash(bun build *)",
       "Read(//Applications/**)",
       "Read(//Users/zhouquan/**)",
-      "WebFetch(domain:herdr.dev)"
+      "WebFetch(domain:herdr.dev)",
+      "ExpertManager",
+      "Bash(~/.kimi-webbridge/bin/kimi-webbridge start:*)"
     ]
   }
 }
