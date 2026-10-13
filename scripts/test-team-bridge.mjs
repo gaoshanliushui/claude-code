@@ -42,6 +42,34 @@ async function main() {
 					`teamInfo=${t.teamInfo ? '✓' : '✗'} members=${memberCount}${leadFile}`,
 			)
 		}
+
+		// 1a. WorkBuddy layout invariant: team members must NOT exist as
+		// separate top-level experts. A team's members live only in
+		// <team>/agents/<member>.md. Top-level dirs for member slugs would
+		// be a duplicate.
+		const topLevel = new Set([
+			...agents.map(a => a.name),
+			...teams.map(t => t.name),
+		])
+		const memberAsTopLevel = []
+		for (const t of teams) {
+			for (const m of t.members ?? []) {
+				const id = m.id ?? m.agentName
+				if (id && topLevel.has(id) && id !== t.name) {
+					memberAsTopLevel.push(`${id} (in ${t.name})`)
+				}
+			}
+		}
+		console.log(
+			`  invariant: top-level experts not duplicated as team members: ${
+				memberAsTopLevel.length === 0 ? '✓' : '✗ ' + memberAsTopLevel.join(', ')
+			}`,
+		)
+		if (memberAsTopLevel.length > 0) {
+			throw new Error(
+				`WorkBuddy layout violated: ${memberAsTopLevel.length} member(s) exist as top-level experts: ${memberAsTopLevel.join(', ')}. Run scripts/merge-team-members.mjs.`,
+			)
+		}
 	}
 
 	// 2. Input schema accepts WorkBuddy i18n + new fields

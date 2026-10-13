@@ -322,8 +322,19 @@ export async function parseExpertDir(
 	const avatarPath = await findAvatar(expertDir, meta.avatar)
 	const readmePath = await findReadme(expertDir)
 
+	// Safety net: legacy plugin.json files used `agentName` only on members
+	// (no `id`). Populate `id` from `agentName` if missing so downstream
+	// code (`m.id ?? m.agentName`) always finds a usable id.
+	const normalizedMembers = Array.isArray(meta.members)
+		? meta.members.map(m => ({
+				...m,
+				id: m.id ?? m.agentName,
+			}))
+		: meta.members
+
 	return {
 		...meta,
+		members: normalizedMembers,
 		prompt: leadMd.body.trim(),
 		promptFrontmatter: restFrontmatter,
 		...(model ? {model} : {}),

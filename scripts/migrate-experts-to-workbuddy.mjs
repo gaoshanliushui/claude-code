@@ -80,9 +80,13 @@ function withWorkBuddyFields(meta, expertType) {
 		}
 	}
 	// Normalize role: 'leader' → 'lead' (WorkBuddy convention)
+	// Also ensure `id` is set (WorkBuddy canonical), falling back to
+	// `agentName` (legacy). Without `id`, the runtime can't register the
+	// member as `expert:<team>:<member>`.
 	if (Array.isArray(out.members)) {
 		out.members = out.members.map(m => ({
 			...m,
+			id: m.id ?? m.agentName,
 			role: m.role === 'leader' ? 'lead' : m.role ?? 'member',
 		}))
 	}
