@@ -110,6 +110,15 @@ import {
 } from './bootstrap/state.js'
 import {createBudgetTracker, checkTokenBudget} from './query/tokenBudget.js'
 import {count} from './utils/array.js'
+import {evaluateGoal} from './tools/GoalTool/evaluator.js'
+import {decideNextStep} from './tools/GoalTool/hook.js'
+import {
+	getActiveGoal,
+	clearActiveGoal,
+} from './tools/GoalTool/activeGoal.js'
+import {isBudgetExhausted, saveGoal} from './tools/GoalTool/storage.js'
+import type {GoalEvaluation} from './tools/GoalTool/types.js'
+import {errorMessage} from './utils/errors.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -1723,6 +1732,82 @@ async function* queryLoop(
 				turnCount: nextTurnCount,
 			})
 			return {reason: 'max_turns', turnCount: nextTurnCount}
+		}
+
+		// GoalTool auto-continue hook. Runs only for top-level conversations
+		// (not sub-agents). After each iteration, ask an independent LLM
+		// whether the success criteria are met; if not, inject a meta user
+		// message that drives the next iteration. Meta message MUST be the
+		// last element of messagesForQuery — the API rejects user/assistant
+		// interleaving (see query.ts recovery pattern around line 1235).
+		if (!toolUseContext.agentId) {
+			const goal = getActiveGoal()
+			if (goal && goal.status === 'active') {
+				let evaluation: GoalEvaluation | null = null
+				try {
+					evaluation = await evaluateGoal(
+						goal,
+						[...messagesForQuery, ...assistantMessages, ...toolResults],
+						toolUseContext.abortController.signal,
+					)
+				} catch (err) {
+					logForDebugging(
+						`[GoalTool] evaluator threw: ${errorMessage(err)}`,
+						{level: 'warn'},
+					)
+				}
+				if (evaluation) {
+					goal.attempts.push({
+						iteration: nextTurnCount,
+						ts: new Date().toISOString(),
+						met: evaluation.met,
+						reason: evaluation.reason,
+						criterionEvidence: evaluation.criterionEvidence,
+						evaluatorCostUsd: evaluation.evaluatorCostUsd,
+					})
+					goal.updatedAt = new Date().toISOString()
+					const outcome = decideNextStep(
+						goal,
+						evaluation,
+						isBudgetExhausted,
+						nextTurnCount,
+					)
+					if (outcome.kind === 'complete') {
+						goal.status = 'completed'
+						goal.goalCompletedAt ??= goal.updatedAt
+						await saveGoal(goal)
+						clearActiveGoal()
+						messagesForQuery = [
+							...messagesForQuery,
+							...assistantMessages,
+							...toolResults,
+							createUserMessage({content: outcome.metaMessage, isMeta: true}),
+						]
+					} else if (outcome.kind === 'fail') {
+						goal.status = 'failed'
+						goal.failedAt ??= goal.updatedAt
+						goal.notes =
+							(goal.notes ?? '') + `\n[fail:${outcome.reason}] ${evaluation.reason}\n`
+						await saveGoal(goal)
+						clearActiveGoal()
+						messagesForQuery = [
+							...messagesForQuery,
+							...assistantMessages,
+							...toolResults,
+							createUserMessage({content: outcome.metaMessage, isMeta: true}),
+						]
+					} else if (outcome.kind === 'continue') {
+						await saveGoal(goal)
+						messagesForQuery = [
+							...messagesForQuery,
+							...assistantMessages,
+							...toolResults,
+							createUserMessage({content: outcome.metaMessage, isMeta: true}),
+						]
+					}
+					// 'noop' or evaluateGoal threw: leave loop state unchanged.
+				}
+			}
 		}
 
 		queryCheckpoint('query_recursive_call')
