@@ -89,8 +89,6 @@
       "Bash(node test/debug_t8.js)",
       "Bash(xxd)",
       "Bash(awk 'NR>=573 && NR<=580' test/game.test.js)",
-      "Bash(sed -i 's|duration:\\\\\\\\\\\\\\\\s\\\\*110|duration:\\\\\\\\\\\\\\\\s*80,|; s|S5 muzzleFlash main duration 110ms|S5 muzzleFlash main duration 80ms|g; s|S5 muzzleFlash duration 110ms|S5 muzzleFlash duration 80ms|g' test/game.test.js)",
-      "Bash(sed -i 's|duration:\\\\\\\\\\\\\\\\s\\\\*80/d|duration:\\\\\\\\\\\\\\\\s*50,/d|g' test/game.test.js)",
       "Bash(awk 'NR==577' test/game.test.js)",
       "Bash(cd:*)",
       "Bash(node test/debug_t5_full.js)",
