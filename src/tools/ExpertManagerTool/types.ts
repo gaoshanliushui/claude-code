@@ -347,15 +347,99 @@ export const inputSchema = z.discriminatedUnion('action', [
 		tags: i18nBilingualArray3,
 		quickPrompts: i18nBilingualArray3,
 		defaultInitPrompt: i18nStringNonEmpty.optional(),
-		// Team structure: legacy `leader_agent`+`member_agents` is still accepted
+		// Team structure: legacy `leader_agent`+`member_agents` is still accepted.
+		// `leader_agent` is now optional — if omitted, the lead is created as an
+		// internal role of the team and its metadata comes from the lead_*
+		// fields below.
 		leader_agent: z
 			.string()
 			.regex(EXPERT_SLUG_REGEX)
-			.describe('Slug of an existing agent-type expert that leads the team.'),
+			.optional()
+			.describe(
+				'Slug of an existing agent-type expert that leads the team. ' +
+					'Optional — if omitted, the lead is created as an internal role of the team.',
+			),
+		// `member_agents` accepts either a string (legacy: slug of an existing
+		// agent-type expert) or a rich object (per-member metadata). The rich
+		// form lets the model provide displayName / profession / description /
+		// maxTurns without first having to create a separate expert.
 		member_agents: z
-			.array(z.string().regex(EXPERT_SLUG_REGEX))
+			.array(
+				z.union([
+					z.string().regex(EXPERT_SLUG_REGEX).describe(
+						'Slug of an existing agent-type expert in the team.',
+					),
+					z.object({
+						id: z
+							.string()
+							.regex(EXPERT_SLUG_REGEX)
+							.describe('Member ID (used as agents/<id>.md filename).'),
+						agentName: z
+							.string()
+							.regex(EXPERT_SLUG_REGEX)
+							.optional()
+							.describe(
+								'Optional: slug of an existing agent-type expert to seed defaults from.',
+							),
+						displayName: i18nStringNonEmpty.optional(),
+						profession: i18nStringNonEmpty.optional(),
+						description: z.string().min(1).optional(),
+						maxTurns: z.number().int().positive().optional(),
+						avatar: z.string().optional(),
+					}),
+				]),
+			)
 			.min(1)
-			.describe('Slugs of additional agent-type experts in the team.'),
+			.describe(
+				'Slugs or rich specs of additional agent-type experts in the team. ' +
+					'Strings reference existing experts; objects provide inline metadata.',
+			),
+		// ---- Lead-specific overrides (used when leader_agent is omitted or to
+		// override metadata of the referenced leader expert) ----
+		leadDisplayName: i18nStringNonEmpty.optional().describe(
+			'Override the lead\'s displayName. If omitted, derived from leader_agent.',
+		),
+		leadProfession: i18nStringNonEmpty.optional().describe(
+			'Override the lead\'s profession. If omitted, derived from leader_agent.',
+		),
+		leadDescription: z
+			.string()
+			.min(1)
+			.optional()
+			.describe('Override the lead\'s description. If omitted, derived from leader_agent.'),
+		leadFlowname: z
+			.string()
+			.optional()
+			.describe('Optional: lead\'s 花名 (Chinese nickname). Defaults to displayName.zh.'),
+		leadMaxTurns: z
+			.number()
+			.int()
+			.positive()
+			.default(200)
+			.describe('Lead .md maxTurns. Default 200 (leads need more turns for orchestration).'),
+		leadPrompt: z
+			.string()
+			.min(1)
+			.optional()
+			.describe(
+				'Override the auto-generated lead .md body. If omitted, the lead .md is ' +
+					'generated from a 4-Phase SOP template (成员表 / Phases / 铁律 / 严禁行为 / 协作规则).',
+			),
+		// ---- SOP customization (used when leadPrompt is omitted) ----
+		sopPhases: z
+			.array(
+				z.object({
+					phase: z.number().int().positive(),
+					name: z.string().min(1),
+					steps: z.array(z.string()).min(1),
+				}),
+			)
+			.optional()
+			.describe('Custom SOP phases. If omitted, a 4-Phase default is generated.'),
+		routingTable: z
+			.array(z.tuple([z.string().min(1), z.string().min(1)]))
+			.optional()
+			.describe('Optional: 问法 → 成员 ID 直调路由表 rows.'),
 		// WorkBuddy optional fields
 		version: z.string().regex(/^\d+\.\d+\.\d+/).optional(),
 		author: authorSchema,
@@ -365,15 +449,16 @@ export const inputSchema = z.discriminatedUnion('action', [
 			.array(
 				z.object({
 					id: z.string().min(1),
-					name: i18nStringNonEmpty.optional(),
-					phases: z.array(z.string()).min(1),
-					description: z.string().optional(),
+					name: z.string().optional(),
+					trigger: z.string().min(1),
+					scope: z.string().min(1),
 				}),
 			)
 			.optional()
 			.describe(
 				'Optional Workflow A/B/C/D entries. WorkBuddy convention. The lead\'s prompt ' +
-					'body describes how to apply each workflow.',
+					'body describes how to apply each workflow. If omitted, a generic 4-workflow ' +
+					'default is generated.',
 			),
 		scope: expertScopeSchema,
 	}),

@@ -26,6 +26,7 @@ import {EXPERT_MANAGER_TOOL_NAME, EXPERT_SLUG_REGEX} from './constants.js'
 import {getPrompt} from './prompt.js'
 import {
 	type Expert,
+	type I18nString,
 	inputSchema,
 	outputSchema,
 	type ExpertManagerInput,
@@ -41,6 +42,14 @@ import {
 	writeExpert,
 } from './expertStorage.js'
 import {validateExpertObject} from './expertValidator.js'
+import {
+	buildLeadSOPBody,
+	buildMemberBody,
+	type LeadSOPBodyInput,
+	type LeadSOPMember,
+	type LeadSOPWorkflow,
+	resolveFlowname,
+} from './sopTemplate.js'
 import {runExpert, runExpertTeam, runExpertTeamReal, cleanupTeamIfPresent} from './expertRunner.js'
 import {
 	renderToolUseErrorMessage,
@@ -167,22 +176,38 @@ export const ExpertManagerTool: Tool<
 		}
 
 		if (input.action === 'create_team') {
-			// Each member agent must exist.
-			const leaderExists = await expertExists(input.leader_agent, getScope(input))
-			if (!leaderExists) {
-				return {
-					result: false,
-					message: `Team leader "${input.leader_agent}" does not exist.`,
-					errorCode: 3,
-				}
-			}
-			for (const m of input.member_agents) {
-				const ok = await expertExists(m, getScope(input))
-				if (!ok) {
+			// `leader_agent` is now optional. If provided, it must exist.
+			if (input.leader_agent) {
+				const leaderExists = await expertExists(input.leader_agent, getScope(input))
+				if (!leaderExists) {
 					return {
 						result: false,
-						message: `Team member "${m}" does not exist.`,
-						errorCode: 4,
+						message: `Team leader "${input.leader_agent}" does not exist.`,
+						errorCode: 3,
+					}
+				}
+			}
+			// Each member must either be an existing expert (string form) or
+			// reference one via agentName (object form). The `id` form (no
+			// agentName) is valid — it just creates a new internal member.
+			for (const m of input.member_agents) {
+				if (typeof m === 'string') {
+					const ok = await expertExists(m, getScope(input))
+					if (!ok) {
+						return {
+							result: false,
+							message: `Team member "${m}" does not exist.`,
+							errorCode: 4,
+						}
+					}
+				} else if (m.agentName) {
+					const ok = await expertExists(m.agentName, getScope(input))
+					if (!ok) {
+						return {
+							result: false,
+							message: `Team member agentName "${m.agentName}" does not exist.`,
+							errorCode: 4,
+						}
 					}
 				}
 			}
@@ -373,19 +398,265 @@ export const ExpertManagerTool: Tool<
 				// WorkBuddy naming convention: lead's slug is `<team-name>-team-lead`.
 				// The lead's .md file in agents/ is `<leadId>.md`.
 				const leadId = `${input.name}-team-lead`
-				const leadMember: TeamMember = {
+
+				// ---- Resolve lead metadata ----
+				// `leader_agent` is optional. If provided, seed defaults from it;
+				// `leadDisplayName` / `leadProfession` / `leadDescription` /
+				// `leadFlowname` / `leadMaxTurns` override those.
+				const leadExpert = input.leader_agent
+					? await readExpert(input.leader_agent, scope)
+					: null
+				const leadFlowname =
+					input.leadFlowname ??
+					resolveFlowname(input.leadDisplayName) ??
+					resolveFlowname(leadExpert?.displayName) ??
+					'主理人'
+				const leadDisplayName: I18nString =
+					input.leadDisplayName ??
+					leadExpert?.displayName ??
+					({zh: leadFlowname, en: 'Team Lead'} as I18nString)
+				const leadProfession: I18nString =
+					input.leadProfession ??
+					leadExpert?.profession ??
+					({zh: '主理人', en: 'Team Lead'} as I18nString)
+				const leadDescription =
+					input.leadDescription ??
+					(typeof leadExpert?.description === 'string'
+						? leadExpert.description
+						: (leadExpert?.description as {zh?: string; en?: string} | undefined)?.zh ??
+							(leadExpert?.description as {zh?: string; en?: string} | undefined)?.en ??
+							`Lead orchestrator for the ${input.name} expert team. Coordinates team members, signs off on final delivery.`)
+				const leadMaxTurns = input.leadMaxTurns ?? 200
+
+				// ---- Resolve each member ----
+				// Two input forms:
+				//   - string: existing agent-type expert slug — pull metadata from it
+				//   - object: rich inline spec — use provided fields, fall back to agentName
+				type ResolvedMember = {
+					id: string
+					agentName?: string
+					displayName?: I18nString
+					profession?: I18nString
+					description?: string
+					maxTurns: number
+					avatar?: string
+					role: 'member'
+					flowname: string
+					roleTitle: string
+					body: string // just the body (NOT including frontmatter)
+				}
+				const resolvedMembers: ResolvedMember[] = []
+				for (const m of input.member_agents) {
+					if (typeof m === 'string') {
+						const expert = await readExpert(m, scope)
+						const flowname = resolveFlowname(expert?.displayName) || m
+						const roleTitle =
+							(typeof expert?.profession === 'string'
+								? expert.profession
+								: (expert?.profession as {zh?: string; en?: string} | undefined)?.zh ??
+									(expert?.profession as {zh?: string; en?: string} | undefined)?.en) ||
+							m
+						const description =
+							(typeof expert?.description === 'string'
+								? expert.description
+								: (expert?.description as {zh?: string; en?: string} | undefined)?.zh ??
+									(expert?.description as {zh?: string; en?: string} | undefined)?.en) ||
+							`Member of the ${input.name} team. References ${m} for the full role definition.`
+						resolvedMembers.push({
+							id: m,
+							agentName: m,
+							displayName: expert?.displayName,
+							profession: expert?.profession,
+							description,
+							maxTurns: 50,
+							role: 'member',
+							flowname,
+							roleTitle,
+							body: buildMemberBody({
+								roleTitle,
+								flowname,
+								identity: [
+									`${flowname}是本团队的${roleTitle}。`,
+									`本成员引用已存在的 agent-type 专家「${m}」的 prompt 作为完整工作流定义。`,
+								],
+								capabilities: [
+									'对应领域的专业能力(由被引用的 expert 提供)',
+									'独立完成主理人派发的子任务',
+									'按规范产出并通过 SendMessage 回传给主理人',
+								],
+								workflow: [
+									'接收主理人派单: 输入 / 产出 / 验收标准',
+									'按被引用 expert 的 prompt 执行子任务',
+									'通过 SendMessage 将完整产出回传给主理人',
+								],
+								outputStandards: [
+									'产出格式遵循被引用 expert 的规范',
+									'关键决策点附理由说明',
+									'风险点显式标注',
+								],
+							}),
+						})
+					} else {
+						const expert = m.agentName ? await readExpert(m.agentName, scope) : null
+						const flowname =
+							resolveFlowname(m.displayName) ??
+							resolveFlowname(expert?.displayName) ??
+							m.id
+						const roleTitle =
+							(typeof m.profession === 'string'
+								? m.profession
+								: m.profession?.zh ?? m.profession?.en) ??
+							(typeof expert?.profession === 'string'
+								? expert.profession
+								: expert?.profession?.zh ?? expert?.profession?.en) ??
+							m.id
+						const description =
+							m.description ??
+							(typeof expert?.description === 'string'
+								? expert.description
+								: expert?.description?.zh ?? expert?.description?.en) ??
+							`${roleTitle} of the ${input.name} team.`
+						const maxTurns = m.maxTurns ?? 50
+						const displayName: I18nString =
+							m.displayName ?? expert?.displayName ?? {zh: flowname, en: flowname}
+						const profession: I18nString =
+							m.profession ?? expert?.profession ?? {zh: roleTitle, en: roleTitle}
+						resolvedMembers.push({
+							id: m.id,
+							agentName: m.agentName,
+							displayName,
+							profession,
+							description,
+							maxTurns,
+							avatar: m.avatar,
+							role: 'member',
+							flowname,
+							roleTitle,
+							body: buildMemberBody({
+								roleTitle,
+								flowname,
+								identity: [
+									`${flowname}是本团队的${roleTitle},负责对应领域的专业产出。`,
+									m.agentName
+										? `本成员参考 agent-type 专家「${m.agentName}」的 prompt 作为完整工作流定义。`
+										: '本成员是团队内部角色,完整 prompt 待主理人后续通过 `edit` 完善。',
+								],
+								capabilities: [
+									`${roleTitle}领域的专业能力(详见 prompt 内容)`,
+									'独立完成主理人派发的子任务',
+									'按规范产出并通过 SendMessage 回传给主理人',
+								],
+								workflow: [
+									'接收主理人派单: 输入 / 产出 / 验收标准',
+									'独立完成子任务,按工作流程执行',
+									'通过 SendMessage 将完整产出回传给主理人',
+								],
+								outputStandards: [
+									'产出格式遵循团队统一规范',
+									'关键决策点附理由说明',
+									'风险点显式标注',
+								],
+							}),
+						})
+					}
+				}
+
+				// ---- Build the lead .md body ----
+				const teamDisplayZh = resolveFlowname(input.displayName) || input.name
+				// memberTable rows: lead first, then members
+				const leadMemberRow: LeadSOPMember = {
 					id: leadId,
-					agentName: input.leader_agent,
+					flowname: leadFlowname,
+					duty: '需求拆解 + 调度 + 终审签发',
+				}
+				const memberRows: LeadSOPMember[] = resolvedMembers.map(m => ({
+					id: m.id,
+					flowname: m.flowname,
+					duty: m.roleTitle,
+				}))
+				const allMemberRows: LeadSOPMember[] = [leadMemberRow, ...memberRows]
+
+				// If the model provided sopPhases, normalize them to the
+				// LeadSOPPhase type. Default otherwise.
+				const sopPhases = input.sopPhases as
+					| LeadSOPBodyInput['sopPhases']
+					| undefined
+
+				// If the model provided workflows, normalize. Default otherwise.
+				const workflows: LeadSOPWorkflow[] | undefined = input.workflows
+					? input.workflows.map(w => ({
+							id: w.id,
+							name: w.name ?? w.id,
+							trigger: w.trigger,
+							scope: w.scope,
+						}))
+					: undefined
+
+				// Lead .md body (just the body, not frontmatter)
+				const leadBody =
+					input.leadPrompt ??
+					buildLeadSOPBody({
+						teamDisplay: teamDisplayZh,
+						leadFlowname,
+						members: allMemberRows,
+						sopPhases,
+						routingTable: input.routingTable,
+						workflows,
+					})
+
+				// ---- Build the rich members[] array ----
+				const leadMemberEntry: TeamMember = {
+					id: leadId,
+					agentName: input.leader_agent ?? leadId,
+					displayName: leadDisplayName,
+					profession: leadProfession,
 					role: 'lead',
 				}
-				const memberMembers: TeamMember[] = input.member_agents.map(m => ({
-					id: m,
-					agentName: m,
+				const memberEntries: TeamMember[] = resolvedMembers.map(m => ({
+					id: m.id,
+					agentName: m.agentName,
+					displayName: m.displayName,
+					profession: m.profession,
+					avatar: m.avatar,
 					role: 'member' as const,
 				}))
-				const members: TeamMember[] = [leadMember, ...memberMembers]
-				const leader = await readExpert(input.leader_agent, scope)
-				const prompt = leader?.prompt ?? 'You are the team lead.'
+				const members: TeamMember[] = [leadMemberEntry, ...memberEntries]
+
+				// ---- Pre-populate teamMemberMeta so writeTeamExpert writes
+				// full WorkBuddy-format .md files (with frontmatter + body). ----
+				const teamMemberMeta = new Map<
+					string,
+					{
+						id: string
+						frontmatter: Record<string, unknown>
+						body: string
+						displayName?: I18nString
+						profession?: I18nString
+						description?: string
+						maxTurns?: number
+					}
+				>()
+				teamMemberMeta.set(leadId, {
+					id: leadId,
+					frontmatter: {maxTurns: leadMaxTurns},
+					body: leadBody,
+					displayName: leadDisplayName,
+					profession: leadProfession,
+					description: leadDescription,
+					maxTurns: leadMaxTurns,
+				})
+				for (const m of resolvedMembers) {
+					teamMemberMeta.set(m.id, {
+						id: m.id,
+						frontmatter: {maxTurns: m.maxTurns},
+						body: m.body,
+						displayName: m.displayName,
+						profession: m.profession,
+						description: m.description,
+						maxTurns: m.maxTurns,
+					})
+				}
+
 				const expert: Expert = {
 					name: input.name,
 					expertType: 'team',
@@ -397,17 +668,25 @@ export const ExpertManagerTool: Tool<
 					tags: input.tags,
 					quickPrompts: input.quickPrompts,
 					defaultInitPrompt,
-					prompt,
+					// `expert.prompt` is the lead's body. The runtime uses it as
+					// the lead's "Your role" guidance. writeTeamExpert writes it
+					// as the lead .md body (with frontmatter added by
+					// buildAgentMarkdown from teamMemberMeta).
+					prompt: leadBody,
+					// maxTurns flows through teamMemberMeta (writeTeamExpert
+					// pulls it as an explicit arg to buildAgentMarkdown), so
+					// leave promptFrontmatter empty to avoid duplicates.
 					promptFrontmatter: {},
 					members,
+					teamMemberMeta,
 					// WorkBuddy fields
 					teamInfo: {
 						leadAgent: leadId,
-						memberAgents: input.member_agents,
+						memberAgents: resolvedMembers.map(m => m.id),
 					},
 					agents: [
 						`./agents/${leadId}.md`,
-						...input.member_agents.map(m => `./agents/${m}.md`),
+						...resolvedMembers.map(m => `./agents/${m.id}.md`),
 					],
 					...(input.version ? {version: input.version} : {}),
 					...(input.author ? {author: input.author} : {}),

@@ -140,8 +140,8 @@ async function main() {
 		avatar: 'avatars/team.png',
 		plugin: 'smoke-test-team',
 		workflows: [
-			{id: 'A', name: {en: 'Workflow A', zh: '工作流 A'}, phases: ['1', '2']},
-			{id: 'B', phases: ['1']},
+			{id: 'A', name: 'Workflow A', trigger: 'Full SOP', scope: 'Phase 1-5'},
+			{id: 'B', name: 'Single agent', trigger: 'Direct question', scope: 'Skip SOP'},
 		],
 	})
 	console.log('create_team i18n parsed:', {
@@ -330,6 +330,204 @@ async function main() {
 			console.log('(WorkBuddy team not imported — run scripts/import-workbuddy-team.mjs)')
 		}
 	}
+
+	// 10. NEW: create_team schema accepts both legacy (string) and rich (object)
+	// member_agents forms, plus lead-specific overrides and custom SOP.
+	const {inputSchema: schema10} = await import(
+		'../src/tools/ExpertManagerTool/types.js'
+	)
+
+	// 10a. Legacy string form (backward compat)
+	const legacyInput = schema10.parse({
+		action: 'create_team',
+		name: 'smoke-team-legacy',
+		displayName: {en: 'Legacy Team', zh: '老格式团队'},
+		profession: {en: 'Legacy', zh: '老格式'},
+		description: '老格式成员验证,确认 string[] 仍被接受',
+		categoryId: '06-ContentCreative',
+		tags: [{en: 'a', zh: '甲'}, {en: 'b', zh: '乙'}, {en: 'c', zh: '丙'}],
+		quickPrompts: [{en: 'q1', zh: '问1'}, {en: 'q2', zh: '问2'}, {en: 'q3', zh: '问3'}],
+		leader_agent: 'smoke-test-i18n',
+		member_agents: ['smoke-test-i18n'],
+	})
+	if (!Array.isArray(legacyInput.member_agents)) {
+		throw new Error('legacy string[] not accepted by create_team schema')
+	}
+	if (legacyInput.member_agents[0] !== 'smoke-test-i18n') {
+		throw new Error('legacy member_agents content not preserved')
+	}
+	console.log('10a. legacy string[] form: ✓')
+
+	// 10b. Rich object form
+	const richInput = schema10.parse({
+		action: 'create_team',
+		name: 'smoke-team-rich',
+		displayName: {en: 'Rich Team', zh: '富对象团队'},
+		profession: {en: 'Rich', zh: '富对象'},
+		description: '富对象成员验证,确认每个成员可传 displayName 等元数据',
+		categoryId: '06-ContentCreative',
+		tags: [{en: 'a', zh: '甲'}, {en: 'b', zh: '乙'}, {en: 'c', zh: '丙'}],
+		quickPrompts: [{en: 'q1', zh: '问1'}, {en: 'q2', zh: '问2'}, {en: 'q3', zh: '问3'}],
+		// leader_agent omitted — the lead is created as an internal role
+		leadDisplayName: {en: 'Architect Chen', zh: '陈架构'},
+		leadProfession: {en: 'Chief Architect', zh: '首席架构师'},
+		leadFlowname: '陈架构',
+		leadMaxTurns: 250,
+		member_agents: [
+			{
+				id: 'backend',
+				agentName: 'smoke-test-i18n',
+				displayName: {en: 'Backend Zhang', zh: '后端张'},
+				profession: {en: 'Backend Engineer', zh: '后端工程师'},
+				description: 'Backend engineer on the smoke team.',
+				maxTurns: 60,
+			},
+			{
+				id: 'frontend',
+				displayName: {en: 'Frontend Li', zh: '前端李'},
+				profession: {en: 'Frontend Engineer', zh: '前端工程师'},
+			},
+		],
+		sopPhases: [
+			{phase: 1, name: '需求立项', steps: ['解析需求', '拆任务']},
+			{phase: 2, name: '执行', steps: ['后端写', '前端写']},
+			{phase: 3, name: '终审签发', steps: ['主理人验收', '交付']},
+		],
+		routingTable: [['实现接口', 'backend'], ['做页面', 'frontend']],
+		workflows: [
+			{id: 'A', name: '完整', trigger: '完整需求', scope: '全部 Phase'},
+		],
+	})
+	if (!Array.isArray(richInput.member_agents)) {
+		throw new Error('rich object[] not accepted by create_team schema')
+	}
+	const member0 = richInput.member_agents[0]
+	if (typeof member0 !== 'object' || member0.id !== 'backend') {
+		throw new Error('rich member_agents[0] not parsed as object with id=backend')
+	}
+	if (member0.maxTurns !== 60) {
+		throw new Error('per-member maxTurns not preserved')
+	}
+	if (richInput.leadMaxTurns !== 250) {
+		throw new Error('leadMaxTurns not preserved')
+	}
+	if (richInput.sopPhases?.length !== 3) {
+		throw new Error('sopPhases not preserved')
+	}
+	if (richInput.routingTable?.length !== 2) {
+		throw new Error('routingTable not preserved')
+	}
+	console.log('10b. rich object[] form + lead overrides + sopPhases: ✓')
+
+	// 10c. leadPrompt override (skip auto-SOP)
+	const overrideInput = schema10.parse({
+		action: 'create_team',
+		name: 'smoke-team-override',
+		displayName: {en: 'Override', zh: '覆盖'},
+		profession: {en: 'Override', zh: '覆盖'},
+		description: '验证 leadPrompt 覆盖自动生成的 SOP 模板',
+		categoryId: '06-ContentCreative',
+		tags: [{en: 'a', zh: '甲'}, {en: 'b', zh: '乙'}, {en: 'c', zh: '丙'}],
+		quickPrompts: [{en: 'q1', zh: '问1'}, {en: 'q2', zh: '问2'}, {en: 'q3', zh: '问3'}],
+		member_agents: ['smoke-test-i18n'],
+		leadPrompt: '# Custom lead prompt\n\nI am the lead.',
+	})
+	if (overrideInput.leadPrompt !== '# Custom lead prompt\n\nI am the lead.') {
+		throw new Error('leadPrompt not preserved')
+	}
+	console.log('10c. leadPrompt override: ✓')
+
+	// 11. SOP template module produces WorkBuddy-shape output
+	const {buildLeadSOPBody, buildMemberBody, buildAgentFrontmatter, resolveFlowname} =
+		await import('../src/tools/ExpertManagerTool/sopTemplate.js')
+
+	// 11a. Frontmatter contains the right keys
+	const fm = buildAgentFrontmatter({
+		id: 'test-id',
+		description: 'A test frontmatter',
+		displayName: {en: 'Test EN', zh: '测试'},
+		profession: {en: 'Tester', zh: '测试员'},
+		maxTurns: 50,
+	})
+	for (const key of ['name: test-id', 'description: A test frontmatter', 'displayName:', 'en: Test EN', 'zh: 测试', 'profession:', 'en: Tester', 'zh: 测试员', 'maxTurns: 50']) {
+		if (!fm.includes(key)) {
+			throw new Error(`buildAgentFrontmatter missing "${key}":\n${fm}`)
+		}
+	}
+	console.log('11a. buildAgentFrontmatter shape: ✓')
+
+	// 11b. Lead body contains the standard sections
+	const leadBody = buildLeadSOPBody({
+		teamDisplay: '测试团队',
+		leadFlowname: '主理人甲',
+		members: [
+			{id: 'team-lead', flowname: '主理人甲', duty: '调度 + 签发'},
+			{id: 'm1', flowname: '成员乙', duty: '领域专家'},
+		],
+	})
+	for (const section of [
+		'# 测试团队 - 主理人 主理人甲',
+		'## 团队成员',
+		'## 标准工作流程(SOP)',
+		'### Phase 1:',
+		'## 预设 Workflow',
+		'## 团队协作机制(铁律)',
+		'### 严禁行为',
+		'## 协作规则',
+	]) {
+		if (!leadBody.includes(section)) {
+			throw new Error(`buildLeadSOPBody missing "${section}":\n${leadBody}`)
+		}
+	}
+	if (leadBody.includes('[TODO')) {
+		throw new Error('buildLeadSOPBody emitted [TODO] placeholder (validator would reject)')
+	}
+	console.log('11b. buildLeadSOPBody sections: ✓')
+
+	// 11c. Member body contains the standard sections
+	const memberBody = buildMemberBody({
+		roleTitle: '工程师',
+		flowname: '成员乙',
+		identity: ['我是成员乙。', '负责工程。'],
+		capabilities: ['写代码', '测试'],
+		workflow: ['接单', '完成', '回传'],
+		outputStandards: ['代码风格一致'],
+	})
+	for (const section of [
+		'# 工程师 - 成员乙',
+		'## 身份',
+		'## 核心能力',
+		'## 工作流程',
+		'## 输出规范',
+		'## SendMessage 回传',
+	]) {
+		if (!memberBody.includes(section)) {
+			throw new Error(`buildMemberBody missing "${section}":\n${memberBody}`)
+		}
+	}
+	console.log('11c. buildMemberBody sections: ✓')
+
+	// 11d. resolveFlowname picks zh over en
+	if (resolveFlowname({en: 'English', zh: '中文'}) !== '中文') {
+		throw new Error('resolveFlowname should prefer zh')
+	}
+	if (resolveFlowname({en: 'English only'}) !== 'English only') {
+		throw new Error('resolveFlowname should fall back to en')
+	}
+	if (resolveFlowname(undefined) !== '') {
+		throw new Error('resolveFlowname should return empty for undefined')
+	}
+	console.log('11d. resolveFlowname: ✓')
+
+	// 11e. ExpertManagerTool.create_team handler exists and uses the SOP template
+	const toolSrc = await Bun.file(
+		join(ROOT_DIR, 'src/tools/ExpertManagerTool/ExpertManagerTool.ts'),
+	).text()
+	const usesSopTemplate = /buildLeadSOPBody/.test(toolSrc) && /buildMemberBody/.test(toolSrc)
+	const populatesTeamMemberMeta = /teamMemberMeta\.set/.test(toolSrc)
+	if (!usesSopTemplate) throw new Error('create_team handler does not call sopTemplate')
+	if (!populatesTeamMemberMeta) throw new Error('create_team handler does not populate teamMemberMeta')
+	console.log('11e. ExpertManagerTool.create_team wired to sopTemplate: ✓')
 
 	console.log()
 	console.log('✅ WorkBuddy compatibility smoke test passed')
