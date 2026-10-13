@@ -21,8 +21,8 @@ import type Anthropic from '@anthropic-ai/sdk'
 import {sideQuery, type SideQueryOptions} from '../../utils/sideQuery.js'
 import {errorMessage} from '../../utils/errors.js'
 import {
-  DEFAULT_EVALUATOR_MODEL,
-  EVALUATOR_MAX_TOKENS,
+	DEFAULT_EVALUATOR_MODEL,
+	EVALUATOR_MAX_TOKENS,
 } from './constants.js'
 import {EVALUATOR_SYSTEM_PROMPT} from './prompt.js'
 import type {Goal, GoalEvaluation, Message} from './types.js'
@@ -30,28 +30,28 @@ import type {Goal, GoalEvaluation, Message} from './types.js'
 type BetaJSONOutputFormat = Anthropic.Beta.Messages.BetaJSONOutputFormat
 
 const OUTPUT_FORMAT = {
-  type: 'json_schema',
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      goal_met: {type: 'boolean'},
-      reasoning: {type: 'string'},
-      criterionEvidence: {
-        type: 'object',
-        additionalProperties: {type: 'boolean'},
-      },
-    },
-    required: ['goal_met', 'reasoning', 'criterionEvidence'],
-  },
+	type: 'json_schema',
+	schema: {
+		type: 'object',
+		additionalProperties: false,
+		properties: {
+			goal_met: {type: 'boolean'},
+			reasoning: {type: 'string'},
+			criterionEvidence: {
+				type: 'object',
+				additionalProperties: {type: 'boolean'},
+			},
+		},
+		required: ['goal_met', 'reasoning', 'criterionEvidence'],
+	},
 } as unknown as BetaJSONOutputFormat
 
 /** Safe text extraction — handles content-block arrays. */
 function extractText(response: Anthropic.Beta.Messages.BetaMessage): string {
-  for (const block of response.content) {
-    if (block.type === 'text') return block.text
-  }
-  return '{}'
+	for (const block of response.content) {
+		if (block.type === 'text') return block.text
+	}
+	return '{}'
 }
 
 /**
@@ -62,15 +62,15 @@ function extractText(response: Anthropic.Beta.Messages.BetaMessage): string {
  * we don't need full fidelity — just enough signal.
  */
 function summarizeTranscript(
-  messages: ReadonlyArray<Message>,
-  charBudget = 16_000,
+	messages: ReadonlyArray<Message>,
+	charBudget = 16_000,
 ): string {
-  const tail = messages.slice(-30)
-  const lines = tail.map(m => {
-    const text = JSON.stringify(m).slice(0, 600)
-    return `[${m.type}] ${text}`
-  })
-  return lines.join('\n').slice(0, charBudget)
+	const tail = messages.slice(-30)
+	const lines = tail.map(m => {
+		const text = JSON.stringify(m).slice(0, 600)
+		return `[${m.type}] ${text}`
+	})
+	return lines.join('\n').slice(0, charBudget)
 }
 
 /**
@@ -80,50 +80,50 @@ function summarizeTranscript(
  * {met: false, reason: 'evaluator_error: ...'}.
  */
 export async function evaluateGoal(
-  goal: Goal,
-  recentMessages: ReadonlyArray<Message>,
-  signal: AbortSignal | undefined,
-  model: string = DEFAULT_EVALUATOR_MODEL,
+	goal: Goal,
+	recentMessages: ReadonlyArray<Message>,
+	signal: AbortSignal | undefined,
+	model: string = DEFAULT_EVALUATOR_MODEL,
 ): Promise<GoalEvaluation> {
-  try {
-    const resp = await sideQuery({
-      model,
-      querySource: 'goal_evaluator' as SideQueryOptions['querySource'],
-      skipSystemPromptPrefix: true,
-      system: EVALUATOR_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content:
-            `Goal: ${goal.objective}\n` +
-            `Criteria:\n${goal.successCriteria
-              .map(c => `  [${c.id}] ${c.description}`)
-              .join('\n')}\n\n` +
-            `Recent transcript:\n${summarizeTranscript(recentMessages)}\n\n` +
-            `Respond with strict JSON per the schema.`,
-        },
-      ],
-      output_format: OUTPUT_FORMAT,
-      max_tokens: EVALUATOR_MAX_TOKENS,
-      signal,
-    })
-    const parsed = JSON.parse(extractText(resp)) as {
-      goal_met: boolean
-      reasoning: string
-      criterionEvidence: Record<string, boolean>
-    }
-    return {
-      met: parsed.goal_met,
-      reason: parsed.reasoning ?? '',
-      criterionEvidence: parsed.criterionEvidence ?? {},
-      evaluatorCostUsd: 0,
-    }
-  } catch (e) {
-    return {
-      met: false,
-      reason: `evaluator_error: ${errorMessage(e)}`,
-      criterionEvidence: {},
-      evaluatorCostUsd: 0,
-    }
-  }
+	try {
+		const resp = await sideQuery({
+			model,
+			querySource: 'goal_evaluator' as SideQueryOptions['querySource'],
+			skipSystemPromptPrefix: true,
+			system: EVALUATOR_SYSTEM_PROMPT,
+			messages: [
+				{
+					role: 'user',
+					content:
+						`Goal: ${goal.objective}\n` +
+						`Criteria:\n${goal.successCriteria
+							.map(c => `  [${c.id}] ${c.description}`)
+							.join('\n')}\n\n` +
+						`Recent transcript:\n${summarizeTranscript(recentMessages)}\n\n` +
+						`Respond with strict JSON per the schema.`,
+				},
+			],
+			output_format: OUTPUT_FORMAT,
+			max_tokens: EVALUATOR_MAX_TOKENS,
+			signal,
+		})
+		const parsed = JSON.parse(extractText(resp)) as {
+			goal_met: boolean
+			reasoning: string
+			criterionEvidence: Record<string, boolean>
+		}
+		return {
+			met: parsed.goal_met,
+			reason: parsed.reasoning ?? '',
+			criterionEvidence: parsed.criterionEvidence ?? {},
+			evaluatorCostUsd: 0,
+		}
+	} catch (e) {
+		return {
+			met: false,
+			reason: `evaluator_error: ${errorMessage(e)}`,
+			criterionEvidence: {},
+			evaluatorCostUsd: 0,
+		}
+	}
 }

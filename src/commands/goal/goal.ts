@@ -64,12 +64,12 @@ export const call: LocalCommandCall = async () => {
 		if (onDisk > 0) {
 			lines.push(
 				`${onDisk} goal(s) on disk — reattach with the agent's ` +
-					`goal({action:"attach", id:"<id>"}) tool.`,
+				`goal({action:"attach", id:"<id>"}) tool.`,
 			)
 		} else {
 			lines.push(
 				'Create one via the agent calling ' +
-					'goal({action:"create", objective:"...", success_criteria:["..."]}).',
+				'goal({action:"create", objective:"...", success_criteria:["..."]}).',
 			)
 		}
 		return {type: 'text', value: lines.join('\n')}

@@ -22,10 +22,10 @@ import {STAGNATION_LIMIT} from './constants.js'
 import type {Goal, GoalEvaluation} from './types.js'
 
 export type GoalHookOutcome =
-  | {kind: 'noop'}
-  | {kind: 'continue'; metaMessage: string}
-  | {kind: 'complete'; metaMessage: string}
-  | {kind: 'fail'; reason: string; metaMessage: string}
+	| { kind: 'noop' }
+	| { kind: 'continue'; metaMessage: string }
+	| { kind: 'complete'; metaMessage: string }
+	| { kind: 'fail'; reason: string; metaMessage: string }
 
 /**
  * Pure decision function: given a goal and its most-recent evaluation,
@@ -38,70 +38,70 @@ export type GoalHookOutcome =
  *   3. Inject `metaMessage` as the LAST element of `messagesForQuery`.
  */
 export function decideNextStep(
-  goal: Goal,
-  evaluation: GoalEvaluation,
-  isBudgetExhausted: (g: Goal, now?: number) => boolean,
-  iterationCount: number,
-  now: number = Date.now(),
+	goal: Goal,
+	evaluation: GoalEvaluation,
+	isBudgetExhausted: (g: Goal, now?: number) => boolean,
+	iterationCount: number,
+	now: number = Date.now(),
 ): GoalHookOutcome {
-  const allCriteriaVerified = goal.successCriteria.every(
-    c => evaluation.criterionEvidence[c.id] === true,
-  )
-  const met = evaluation.met && allCriteriaVerified
-  const exhausted = isBudgetExhausted(goal, now)
+	const allCriteriaVerified = goal.successCriteria.every(
+		c => evaluation.criterionEvidence[c.id] === true,
+	)
+	const met = evaluation.met && allCriteriaVerified
+	const exhausted = isBudgetExhausted(goal, now)
 
-  // Stagnation check: last N non-met attempts share the same reason.
-  const recentAttempts = goal.attempts.slice(-STAGNATION_LIMIT)
-  const stagnant =
-    recentAttempts.length >= STAGNATION_LIMIT &&
-    recentAttempts.every(a => !a.met) &&
-    recentAttempts.every(
-      (a, i, arr) => i === 0 || a.reason === arr[i - 1]!.reason,
-    )
+	// Stagnation check: last N non-met attempts share the same reason.
+	const recentAttempts = goal.attempts.slice(-STAGNATION_LIMIT)
+	const stagnant =
+		recentAttempts.length >= STAGNATION_LIMIT &&
+		recentAttempts.every(a => !a.met) &&
+		recentAttempts.every(
+			(a, i, arr) => i === 0 || a.reason === arr[i - 1]!.reason,
+		)
 
-  if (met) {
-    return {
-      kind: 'complete',
-      metaMessage:
-        `[GoalTool] Goal "${goal.objective}" achieved after ${iterationCount} iteration(s).\n\n` +
-        `Summary: ${evaluation.reason}\n\n` +
-        `Stop working on the goal. Briefly tell the user what was accomplished.`,
-    }
-  }
+	if (met) {
+		return {
+			kind: 'complete',
+			metaMessage:
+				`[GoalTool] Goal "${goal.objective}" achieved after ${iterationCount} iteration(s).\n\n` +
+				`Summary: ${evaluation.reason}\n\n` +
+				`Stop working on the goal. Briefly tell the user what was accomplished.`,
+		}
+	}
 
-  if (stagnant) {
-    return {
-      kind: 'fail',
-      reason: 'stagnant',
-      metaMessage:
-        `[GoalTool] Goal progress is stagnant — same evaluator verdict ${STAGNATION_LIMIT} times in a row.\n\n` +
-        `Last reason: ${evaluation.reason}\n\n` +
-        `Stop. Tell the user the goal loop is stuck and surface the evaluator's verdict.`,
-    }
-  }
+	if (stagnant) {
+		return {
+			kind: 'fail',
+			reason: 'stagnant',
+			metaMessage:
+				`[GoalTool] Goal progress is stagnant — same evaluator verdict ${STAGNATION_LIMIT} times in a row.\n\n` +
+				`Last reason: ${evaluation.reason}\n\n` +
+				`Stop. Tell the user the goal loop is stuck and surface the evaluator's verdict.`,
+		}
+	}
 
-  if (exhausted) {
-    return {
-      kind: 'fail',
-      reason: 'budget_exhausted',
-      metaMessage:
-        `[GoalTool] Budget exhausted after ${goal.attempts.length}/${goal.budget.maxIterations} iteration(s).\n\n` +
-        `Last evaluator verdict: ${evaluation.reason}\n\n` +
-        `Stop. Tell the user the budget was exhausted and surface the partial state.`,
-    }
-  }
+	if (exhausted) {
+		return {
+			kind: 'fail',
+			reason: 'budget_exhausted',
+			metaMessage:
+				`[GoalTool] Budget exhausted after ${goal.attempts.length}/${goal.budget.maxIterations} iteration(s).\n\n` +
+				`Last evaluator verdict: ${evaluation.reason}\n\n` +
+				`Stop. Tell the user the budget was exhausted and surface the partial state.`,
+		}
+	}
 
-  const missing = goal.successCriteria
-    .filter(c => !evaluation.criterionEvidence[c.id])
-    .map(c => c.description)
-    .join('; ')
+	const missing = goal.successCriteria
+		.filter(c => !evaluation.criterionEvidence[c.id])
+		.map(c => c.description)
+		.join('; ')
 
-  return {
-    kind: 'continue',
-    metaMessage:
-      `[GoalTool] Goal "${goal.objective}" — iteration ${iterationCount}/${goal.budget.maxIterations}.\n\n` +
-      `Evaluator verdict: not yet met.\nReason: ${evaluation.reason}\n` +
-      `Missing criteria: ${missing || '(none specific)'}\n\n` +
-      `Continue working toward the goal. Do not repeat prior work — adjust strategy based on the missing criteria above.`,
-  }
+	return {
+		kind: 'continue',
+		metaMessage:
+			`[GoalTool] Goal "${goal.objective}" — iteration ${iterationCount}/${goal.budget.maxIterations}.\n\n` +
+			`Evaluator verdict: not yet met.\nReason: ${evaluation.reason}\n` +
+			`Missing criteria: ${missing || '(none specific)'}\n\n` +
+			`Continue working toward the goal. Do not repeat prior work — adjust strategy based on the missing criteria above.`,
+	}
 }

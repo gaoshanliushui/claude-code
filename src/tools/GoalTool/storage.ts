@@ -20,53 +20,53 @@ import {GOALS_DIR_NAME, GOAL_FILE_EXT} from './constants.js'
 import type {Goal} from './types.js'
 
 function goalsDir(): string {
-  return join(getClaudeConfigHomeDir(), GOALS_DIR_NAME)
+	return join(getClaudeConfigHomeDir(), GOALS_DIR_NAME)
 }
 
 function goalPath(id: string): string {
-  return join(goalsDir(), `${id}${GOAL_FILE_EXT}`)
+	return join(goalsDir(), `${id}${GOAL_FILE_EXT}`)
 }
 
 export async function saveGoal(g: Goal): Promise<void> {
-  const fs = getFsImplementation()
-  await fs.mkdir(goalsDir(), {recursive: true})
-  await fs.writeFile(goalPath(g.id), JSON.stringify(g, null, 2), 'utf-8')
+	const fs = getFsImplementation()
+	await fs.mkdir(goalsDir(), {recursive: true})
+	await fs.writeFile(goalPath(g.id), JSON.stringify(g, null, 2), 'utf-8')
 }
 
 export async function loadGoal(id: string): Promise<Goal | null> {
-  const fs = getFsImplementation()
-  try {
-    const raw = await fs.readFile(goalPath(id), 'utf-8')
-    return JSON.parse(raw) as Goal
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw e
-  }
+	const fs = getFsImplementation()
+	try {
+		const raw = await fs.readFile(goalPath(id), 'utf-8')
+		return JSON.parse(raw) as Goal
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+		throw e
+	}
 }
 
 export async function listGoals(): Promise<Goal[]> {
-  const fs = getFsImplementation()
-  let names: string[]
-  try {
-    names = await fs.readdir(goalsDir())
-  } catch {
-    return []
-  }
-  const results = await Promise.all(
-    names
-      .filter(n => n.endsWith(GOAL_FILE_EXT))
-      .map(n => loadGoal(n.slice(0, -GOAL_FILE_EXT.length))),
-  )
-  return results.filter((g): g is Goal => g !== null)
+	const fs = getFsImplementation()
+	let names: string[]
+	try {
+		names = await fs.readdir(goalsDir())
+	} catch {
+		return []
+	}
+	const results = await Promise.all(
+		names
+			.filter(n => n.endsWith(GOAL_FILE_EXT))
+			.map(n => loadGoal(n.slice(0, -GOAL_FILE_EXT.length))),
+	)
+	return results.filter((g): g is Goal => g !== null)
 }
 
 export async function deleteGoal(id: string): Promise<void> {
-  const fs = getFsImplementation()
-  try {
-    await fs.unlink(goalPath(id))
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-  }
+	const fs = getFsImplementation()
+	try {
+		await fs.unlink(goalPath(id))
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+	}
 }
 
 /**
@@ -77,9 +77,9 @@ export async function deleteGoal(id: string): Promise<void> {
  * matter — only elapsed time since the goal was created.
  */
 export function isBudgetExhausted(g: Goal, now: number = Date.now()): boolean {
-  const iterCap = g.attempts.length >= g.budget.maxIterations
-  const wallCap =
-    g.budget.maxWallMs !== undefined &&
-    now - Date.parse(g.createdAt) > g.budget.maxWallMs
-  return iterCap || wallCap
+	const iterCap = g.attempts.length >= g.budget.maxIterations
+	const wallCap =
+		g.budget.maxWallMs !== undefined &&
+		now - Date.parse(g.createdAt) > g.budget.maxWallMs
+	return iterCap || wallCap
 }
