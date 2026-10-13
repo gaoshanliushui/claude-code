@@ -356,10 +356,48 @@ export const getAgentDefinitionsWithOverrides = memoize(
 
 			const builtInAgents = getBuiltInAgents()
 
+			// Bridge: register every agent-type expert from ExpertManagerTool
+			// as a CustomAgentDefinition. This makes `expert:<slug>` a valid
+			// subagent_type for the Agent tool, and when used in a team context
+			// (with `name` and `team_name`), it spawns a real teammate with
+			// SendMessage / TeamCreate / TeamDelete / Task* auto-injected by
+			// runInProcessTeammate (see inProcessRunner.ts:975-1001).
+			//
+			// Team-type experts are intentionally NOT registered here — the
+			// leader is the current process whose system prompt cannot be
+			// changed mid-session. Their members (which must be agent-type)
+			// are registered automatically when they exist.
+			const {listExperts} = await import(
+				'../ExpertManagerTool/expertStorage.js'
+			)
+			const expertAgents = await listExperts(undefined, 'agent')
+			const expertDefs: AgentDefinition[] = expertAgents.map(expert => {
+				const description =
+					typeof expert.description === 'string'
+						? expert.description
+						: (expert.description as {en?: string; zh?: string} | undefined)
+								?.en ??
+							(expert.description as {en?: string; zh?: string} | undefined)
+								?.zh ??
+							`Custom expert "${expert.name}"`
+				return {
+					agentType: `expert:${expert.name}`,
+					whenToUse: description,
+					tools: ['*'],
+					source: 'userSettings', // passes isCustomAgent() at spawnMultiAgent.ts:881
+					baseDir: expert.path,
+					getSystemPrompt: () => expert.prompt,
+					model: expert.model ?? 'inherit',
+					description,
+					omitClaudeMd: false,
+				}
+			})
+
 			const allAgentsList: AgentDefinition[] = [
 				...builtInAgents,
 				...pluginAgents,
 				...customAgents,
+				...expertDefs,
 			]
 
 			const activeAgents = getActiveAgentsFromList(allAgentsList)

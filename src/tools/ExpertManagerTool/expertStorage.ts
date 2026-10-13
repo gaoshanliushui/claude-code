@@ -14,6 +14,7 @@ import {mkdir, rm, writeFile} from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import {homedir} from 'os'
 import {dirname, join, resolve, sep} from 'path'
+import {clearAgentDefinitionsCache} from '../AgentTool/loadAgentsDir.js'
 import {getClaudeConfigHomeDir} from '../../utils/envUtils.js'
 import {getManagedFilePath} from '../../utils/settings/managedPath.js'
 import {getCwd} from '../../utils/cwd.js'
@@ -306,6 +307,11 @@ export async function writeExpert(
 	)
 
 	clearExpertsCache()
+	// Invalidate the agent-definitions memo so newly written experts appear in
+	// `activeAgents` (used by AgentTool / spawnTeammate for subagent_type
+	// resolution). Without this, a freshly created expert wouldn't be visible
+	// to the Agent tool until the next process restart.
+	clearAgentDefinitionsCache()
 	return {root, dir, path: expertDir}
 }
 
@@ -325,6 +331,7 @@ export async function deleteExpert(
 		if (!existsSync(expertDir)) continue
 		await rm(expertDir, {recursive: true, force: true})
 		clearExpertsCache()
+		clearAgentDefinitionsCache()
 		return {root, path: expertDir}
 	}
 	return null

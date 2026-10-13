@@ -257,3 +257,177 @@ export async function runExpertTeam(
 /** Suppress unused-import warning while keeping normalizeMessages available
  *  for future extensions (e.g., streaming raw message output to progress). */
 export const _normalize = normalizeMessages
+
+// ---------------------------------------------------------------------------
+// Real team runtime: bridge to TeamCreateTool + Agent spawn.
+// ---------------------------------------------------------------------------
+
+import type {ToolResult} from '../../Tool.js'
+
+/** Result of `runExpertTeamReal` — extends `ExpertInvokeResult` with the
+ *  team name and member count for the leader to track. */
+export type ExpertTeamInvokeResult = ExpertInvokeResult & {
+	teamName: string
+	memberCount: number
+}
+
+/** Coordinator guidance: a structured prompt the leader (current process)
+ *  receives as the `invoke` tool result, telling it how to coordinate the
+ *  freshly spawned teammates. The team expert's `prompt` is delivered here
+ *  as guidance (since the leader's system prompt cannot be changed mid-
+ *  session). */
+function buildCoordinatorGuidance(
+	team: Expert,
+	taskPrompt: string,
+	teamName: string,
+	members: Array<{name: string; teammateId: string | null}>,
+): string {
+	const memberList = members
+		.map(m =>
+			m.teammateId
+				? `- ${m.name} (teammate_id: ${m.teammateId})`
+				: `- ${m.name} (spawn failed)`,
+		)
+		.join('\n')
+	const teamPrompt = team.prompt.trim()
+	return [
+		`## Team: ${team.name} (${teamName})`,
+		'',
+		'### Your role',
+		teamPrompt,
+		'',
+		'### Members spawned',
+		memberList,
+		'',
+		'### Original task',
+		taskPrompt,
+		'',
+		'### Coordination',
+		'Use SendMessage to talk to each member. Members can also send you messages. ' +
+			'When done coordinating and gathering results, synthesize a final answer. ' +
+			'If persistTeam=false, TeamDelete will be called automatically when this session ends.',
+	].join('\n')
+}
+
+/**
+ * Coordinator flow: drive a real team via TeamCreate + per-member Agent
+ * spawns. Members become real teammates with SendMessage / TeamCreate /
+ * TeamDelete / Task* auto-injected by runInProcessTeammate. The leader is
+ * the current process and is told via the returned tool result how to
+ * coordinate, then uses SendMessage to drive the team in its next turn.
+ *
+ * Hard constraint: the leader's system prompt cannot be changed mid-
+ * session (set at CLI startup, see main.tsx:1631-1635). So the team
+ * expert's `prompt` is delivered as coordinator guidance, not a system
+ * prompt override.
+ */
+export async function runExpertTeamReal(
+	team: Expert,
+	taskPrompt: string,
+	scope: ExpertScope | undefined,
+	context: ToolUseContext,
+	canUseTool: CanUseToolFn,
+	opts: {persistTeam: boolean; teamTimeoutMs: number},
+): Promise<ExpertTeamInvokeResult> {
+	const start = Date.now()
+	const {TeamCreateTool} = await import('../TeamCreateTool/TeamCreateTool.js')
+	const {AgentTool} = await import('../AgentTool/AgentTool.jsx')
+
+	const teamName = `expert_${team.name}_${Date.now().toString(36)}`
+	const description =
+		typeof team.description === 'string'
+			? team.description
+			: (team.description as {en?: string} | undefined)?.en ?? ''
+
+	// 1. TeamCreate — registers the team, sets appState.teamContext, calls
+	//    setLeaderTeamName + resetTaskList. Note: this does NOT spawn a new
+	//    session for the lead; the lead IS the current process.
+	await TeamCreateTool.call(
+		{team_name: teamName, description, agent_type: `expert:${team.name}`},
+		context,
+		canUseTool,
+	)
+
+	// 2. Spawn one teammate per member in parallel.
+	const memberResults: Array<{name: string; teammateId: string | null}> = []
+	await Promise.all(
+		(team.members ?? []).map(async member => {
+			const memberExpert = await readExpert(member.agentName, scope)
+			if (!memberExpert || memberExpert.expertType !== 'agent') {
+				logForDebugging(
+					`Team member "${member.agentName}" missing or wrong type; skipping`,
+					{level: 'warn'},
+				)
+				return
+			}
+			try {
+				const spawnResult = await AgentTool.call(
+					{
+						description: `Spawn teammate ${member.agentName}`,
+						prompt: taskPrompt,
+						subagent_type: `expert:${memberExpert.name}`,
+						name: memberExpert.agentName,
+						team_name: teamName,
+						run_in_background: false,
+					},
+					context,
+					canUseTool,
+				)
+				const data = spawnResult?.data as
+					| {status?: string; teammate_id?: string}
+					| undefined
+				memberResults.push({
+					name: member.agentName,
+					teammateId:
+						data?.status === 'teammate_spawned'
+							? (data.teammate_id ?? null)
+							: null,
+				})
+			} catch (err) {
+				logForDebugging(
+					`Failed to spawn teammate ${member.agentName}: ${err instanceof Error ? err.message : String(err)}`,
+					{level: 'warn'},
+				)
+				memberResults.push({name: member.agentName, teammateId: null})
+			}
+		}),
+	)
+
+	// 3. Return immediately with coordinator guidance. The leader (current
+	//    process) reads the tool result and proceeds to coordinate via
+	//    SendMessage in subsequent turns. We do not block here waiting for
+	//    teammates to go idle — that's the leader's job.
+	void opts // teamTimeoutMs / persistTeam are surfaced for future use; current
+	//            implementation does not auto-cleanup (handled by session-end
+	//            GC via registerTeamForSessionCleanup, and by explicit
+	//            TeamDelete calls from the model).
+
+	return {
+		status: 'completed',
+		expertName: team.name,
+		expertType: 'team',
+		agentId: `team:${teamName}`,
+		content: buildCoordinatorGuidance(team, taskPrompt, teamName, memberResults),
+		durationMs: Date.now() - start,
+		teamName,
+		memberCount: memberResults.length,
+	}
+}
+
+/** Best-effort TeamDelete wrapper for cleanup on error. */
+export async function cleanupTeamIfPresent(
+	context: ToolUseContext,
+	canUseTool: CanUseToolFn,
+): Promise<void> {
+	try {
+		const {TeamDeleteTool} = await import(
+			'../TeamDeleteTool/TeamDeleteTool.js'
+		)
+		await TeamDeleteTool.call({}, context, canUseTool)
+	} catch {
+		// ignore — best effort
+	}
+}
+
+// Re-export the ToolResult type for callers that want to type-narrow.
+export type {ToolResult}

@@ -48,7 +48,21 @@ Actions (all take an \`action\` discriminator):
 - \`validate\` — run static checks (required fields, tags/quickPrompts
   lengths, description length, team member existence, [TODO] placeholders).
 - \`invoke\` — run an expert on a specific prompt. Returns the expert's
-  final assistant message and the spawned agentId(s).
+  final assistant message and the spawned agentId(s). Has an optional
+  \`runtime\` field:
+    - \`auto\` (default) — picks by expertType: agent → single, team → team.
+    - \`single\` — always uses the in-process runAgent path (no real
+      teammates; leader+member outputs are concatenated).
+    - \`team\` — uses TeamCreate + per-member Agent spawns. Members become
+      real teammates with SendMessage available. The leader (current
+      process) is told via the tool result how to coordinate. Requires
+      \`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1\` or \`--agent-teams\` (or
+      \`USER_TYPE=ant\`). Use \`team\` when members need to discuss / react
+      to each other. Use \`single\` when the user wants quick N-perspective
+      output without real coordination.
+  Additional \`invoke\` fields: \`persistTeam\` (default false) to keep the
+  team alive after invoke; \`teamTimeoutMs\` (default 600000) for per-
+  invocation idle timeout.
 
 Storage:
 
@@ -98,7 +112,47 @@ Example — invoke:
   "name": "stock-analyst",
   "prompt": "评估一下腾讯最近的走势"
 }
-\`\`\``
+\`\`\`
+
+Example — invoke a team with real coordination:
+
+\`\`\`
+{
+  "action": "invoke",
+  "name": "toutiao-ops-team",
+  "prompt": "诊断当前账号瓶颈",
+  "runtime": "team",
+  "persistTeam": false
+}
+\`\`\`
+
+Team expert prompt authoring (for the coordinator role):
+
+When \`runtime=team\` is used, the team expert's \`prompt\` is delivered to
+the leader (the current process) as guidance, not a system prompt override.
+So team expert prompts should be written as **coordinator instructions** —
+they tell the leader how to orchestrate the named members. Example shape:
+
+\`\`\`markdown
+You are coordinating a team of N experts to address the user's task.
+
+Members:
+- {member1-slug}: {what they do}
+- {member2-slug}: {what they do}
+...
+
+Workflow:
+1. Decompose the user's task into N sub-tasks, one per member.
+2. Use SendMessage to send each member their sub-task.
+3. Collect their responses.
+4. Synthesize a unified final answer.
+5. If persistTeam was false, TeamDelete cleans up at session end.
+\`\`\`
+
+Hard constraint: the leader's system prompt is fixed at CLI startup and
+cannot be changed by tool invocations. The team expert's prompt lives in
+the tool result, where the leader can read and act on it.
+`
 
 export function getPrompt(): string {
 	return `${DESCRIPTION}\n\nTool name: \`${EXPERT_MANAGER_TOOL_NAME}\`.`

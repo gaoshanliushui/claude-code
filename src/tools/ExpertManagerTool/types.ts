@@ -225,6 +225,26 @@ export const inputSchema = z.discriminatedUnion('action', [
 			.string()
 			.optional()
 			.describe('Override the expert\'s default model for this invocation.'),
+		runtime: z
+			.enum(['auto', 'single', 'team'])
+			.default('auto')
+			.describe(
+				"Execution mode. 'auto' picks by expertType (team→team if swarms enabled, else single). " +
+					"'single' always uses the in-process runAgent path (no real teammates). " +
+					"'team' uses TeamCreate + real teammates with SendMessage. Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (or USER_TYPE=ant).",
+			),
+		persistTeam: z
+			.boolean()
+			.default(false)
+			.describe(
+				'If true, do not call TeamDelete when invoke finishes. Useful for inspection / further coordination.',
+			),
+		teamTimeoutMs: z
+			.number()
+			.int()
+			.positive()
+			.optional()
+			.describe('Per-invocation idle timeout in ms. Default 600000 (10 min).'),
 	}),
 ])
 export type ExpertManagerInput = z.infer<typeof inputSchema>
@@ -306,12 +326,17 @@ export const outputSchema = z.discriminatedUnion('action', [
 	}),
 	z.object({
 		action: z.literal('invoke'),
-		status: z.enum(['completed']),
+		status: z.enum(['completed', 'rejected']),
 		expertName: z.string(),
 		expertType: z.enum(['agent', 'team']),
 		agentId: z.string(),
 		content: z.string(),
 		durationMs: z.number(),
+		// Populated when runtime='team':
+		teamName: z.string().optional(),
+		memberCount: z.number().optional(),
+		// Populated when status='rejected':
+		reason: z.string().optional(),
 	}),
 ])
 export type ExpertManagerOutput = z.infer<typeof outputSchema>

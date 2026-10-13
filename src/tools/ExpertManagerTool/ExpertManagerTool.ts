@@ -14,6 +14,7 @@
 import type {CanUseToolFn} from '../../hooks/useCanUseTool.js'
 import {logForDebugging} from '../../utils/debug.js'
 import {lazySchema} from '../../utils/lazySchema.js'
+import {isAgentSwarmsEnabled} from '../../utils/agentSwarmsEnabled.js'
 import type {
 	Tool,
 	ToolResult,
@@ -40,7 +41,7 @@ import {
 	writeExpert,
 } from './expertStorage.js'
 import {validateExpertObject} from './expertValidator.js'
-import {runExpert, runExpertTeam} from './expertRunner.js'
+import {runExpert, runExpertTeam, runExpertTeamReal, cleanupTeamIfPresent} from './expertRunner.js'
 import {
 	renderToolUseErrorMessage,
 	renderToolUseMessage,
@@ -500,8 +501,46 @@ export const ExpertManagerTool: Tool<
 					throw new Error(`Expert "${input.name}" not found.`)
 				}
 				const modelOverride = (input as {model?: string}).model
-				if (expert.expertType === 'team') {
-					const teamResult = await runExpertTeam(
+				const runtime = (input as {runtime?: 'auto' | 'single' | 'team'})
+					.runtime ?? 'auto'
+				const resolvedRuntime: 'single' | 'team' =
+					runtime === 'auto'
+						? expert.expertType === 'team'
+							? 'team'
+							: 'single'
+						: runtime
+
+				// Fail fast when team runtime is requested but swarms are off.
+				if (resolvedRuntime === 'team' && !isAgentSwarmsEnabled()) {
+					return {
+						data: {
+							action: 'invoke',
+							status: 'rejected',
+							expertName: expert.name,
+							expertType: expert.expertType,
+							agentId: '',
+							content: '',
+							durationMs: 0,
+							reason:
+								'Team runtime requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 or --agent-teams (USER_TYPE=ant always on). ' +
+								'Set runtime="single" to fall back to the in-process runAgent path.',
+						},
+					}
+				}
+
+				if (resolvedRuntime === 'single') {
+					if (expert.expertType === 'team') {
+						const teamResult = await runExpertTeam(
+							expert,
+							input.prompt,
+							scope,
+							context,
+							canUseTool,
+							modelOverride as never,
+						)
+						return {data: teamResult}
+					}
+					const singleResult = await runExpert(
 						expert,
 						input.prompt,
 						scope,
@@ -509,17 +548,35 @@ export const ExpertManagerTool: Tool<
 						canUseTool,
 						modelOverride as never,
 					)
-					return {data: teamResult}
+					return {data: singleResult}
 				}
-				const singleResult = await runExpert(
-					expert,
-					input.prompt,
-					scope,
-					context,
-					canUseTool,
-					modelOverride as never,
-				)
-				return {data: singleResult}
+
+				// resolvedRuntime === 'team' — drive a real team via
+				// TeamCreate + per-member Agent spawn. Members become real
+				// teammates with SendMessage auto-injected. The leader (the
+				// current process) is told via the returned tool result how
+				// to coordinate, then uses SendMessage in subsequent turns.
+				const persistTeam =
+					(input as {persistTeam?: boolean}).persistTeam ?? false
+				const teamTimeoutMs =
+					(input as {teamTimeoutMs?: number}).teamTimeoutMs ?? 600_000
+				try {
+					const teamResult = await runExpertTeamReal(
+						expert,
+						input.prompt,
+						scope,
+						context,
+						canUseTool,
+						{persistTeam, teamTimeoutMs},
+					)
+					return {data: teamResult}
+				} catch (err) {
+					// Best-effort TeamDelete on any failure to avoid leaking
+					// team state. Swallow the cleanup error and rethrow the
+					// original so the user sees the real cause.
+					await cleanupTeamIfPresent(context, canUseTool)
+					throw err
+				}
 			}
 		}
 	},
