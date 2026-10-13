@@ -31,6 +31,19 @@ function displayNameText(d: unknown): string {
 	return '(unnamed)'
 }
 
+/** Render an i18n value as `en / zh` (zh if CJK present, else en). */
+function i18nText(d: unknown): string {
+	if (typeof d === 'string') return d
+	if (d && typeof d === 'object') {
+		const obj = d as {en?: string; zh?: string}
+		const zh = obj.zh
+		const en = obj.en
+		if (zh && en) return `${zh} / ${en}`
+		return zh ?? en ?? ''
+	}
+	return ''
+}
+
 function truncate(s: string, n: number): string {
 	if (s.length <= n) return s
 	return s.slice(0, Math.max(0, n - 1)) + '…'
@@ -156,10 +169,13 @@ function ListResult({out}: {out: Extract<ExpertManagerOutput, {action: 'list'}>}
 						</Text>{' '}
 						<Text bold>{e.name}</Text>{' '}
 						<Text dimColor>{`(${SCOPE_LABEL[e.scope]})`}</Text>{' '}
+						{e.version ? <Text dimColor>{`v${e.version} `}</Text> : null}
 						<Text>{displayNameText(e.displayName)}</Text>
 					</Text>
 					<Text dimColor>{`    ${truncate(e.description, 80)}`}</Text>
-					<Text dimColor>{`    tags=[${e.tags.join(', ')}]  category=${e.categoryId}`}</Text>
+					<Text dimColor>{`    tags=[${e.tags
+						.map(t => (typeof t === 'string' ? t : i18nText(t)))
+						.join(', ')}]  category=${e.categoryId}${e.avatar ? '  has-avatar' : ''}`}</Text>
 				</Box>
 			))}
 			<Text>{`${out.experts.length} expert(s) found.`}</Text>
@@ -169,30 +185,71 @@ function ListResult({out}: {out: Extract<ExpertManagerOutput, {action: 'list'}>}
 
 function ViewResult({out}: {out: Extract<ExpertManagerOutput, {action: 'view'}>}) {
 	const e = out.expert
+	const i18nTags = e.meta.tags
+		.map(t => (typeof t === 'string' ? t : i18nText(t)))
+		.join(', ')
 	return (
 		<Box flexDirection="column">
 			<Text>
 				<Text bold>{e.meta.name}</Text>{' '}
 				<Text dimColor>{`(${SCOPE_LABEL[e.scope]})`}</Text>{' '}
 				<Text>{e.meta.expertType === 'team' ? '[team]' : '[agent]'}</Text>
+				{'version' in e.meta && e.meta.version ? (
+					<Text dimColor>{` v${e.meta.version}`}</Text>
+				) : null}
 			</Text>
 			<Text>{`displayName: ${displayNameText(e.meta.displayName)}`}</Text>
 			<Text>{`profession: ${displayNameText(e.meta.profession)}`}</Text>
 			<Text>{`description: ${e.meta.description}`}</Text>
+			{'displayDescription' in e.meta && e.meta.displayDescription ? (
+				<Text>{`displayDescription: ${i18nText(e.meta.displayDescription)}`}</Text>
+			) : null}
+			{'author' in e.meta && e.meta.author ? (
+				<Text>{`author: ${e.meta.author.name}${e.meta.author.email ? ` <${e.meta.author.email}>` : ''}`}</Text>
+			) : null}
+			{'plugin' in e.meta && e.meta.plugin ? (
+				<Text>{`plugin: ${e.meta.plugin}`}</Text>
+			) : null}
+			{'avatar' in e.meta && e.meta.avatar ? (
+				<Text>{`avatar: ${e.meta.avatar}${e.avatarPath ? ` (${e.avatarPath})` : ' (file not found)'}`}</Text>
+			) : null}
 			<Text>{`categoryId: ${e.meta.categoryId}`}</Text>
-			<Text>{`tags: [${e.meta.tags.join(', ')}]`}</Text>
+			<Text>{`tags: [${i18nTags}]`}</Text>
 			<Text>{`quickPrompts:`}</Text>
 			{e.meta.quickPrompts.map((q, i) => (
-				<Text key={i}>{`  ${i + 1}. ${q}`}</Text>
+				<Text key={i}>{`  ${i + 1}. ${i18nText(q)}`}</Text>
 			))}
 			{e.meta.expertType === 'team' && e.meta.members ? (
 				<>
 					<Text>{`members:`}</Text>
 					{e.meta.members.map((m, i) => (
-						<Text key={i}>{`  - ${m.agentName}${m.role ? ` (${m.role})` : ''}`}</Text>
+						<Text key={i}>{`  - ${m.id ?? m.agentName}${m.role ? ` (${m.role})` : ''}${
+							typeof m.displayName === 'string'
+								? ` "${m.displayName}"`
+								: m.displayName
+									? ` "${i18nText(m.displayName)}"`
+									: ''
+						}`}</Text>
 					))}
 				</>
 			) : null}
+			{'teamInfo' in e.meta && e.meta.teamInfo ? (
+				<>
+					<Text>{`teamInfo:`}</Text>
+					<Text>{`  leadAgent: ${e.meta.teamInfo.leadAgent}`}</Text>
+					<Text>{`  memberAgents: [${e.meta.teamInfo.memberAgents.join(', ')}]`}</Text>
+				</>
+			) : null}
+			{e.leadFile ? <Text>{`leadFile: ${e.leadFile}`}</Text> : null}
+			{e.agentFiles && e.agentFiles.length > 0 ? (
+				<>
+					<Text>{`agentFiles:`}</Text>
+					{e.agentFiles.map(af => (
+						<Text key={af.id}>{`  - ${af.id}: ${af.path}`}</Text>
+					))}
+				</>
+			) : null}
+			{e.readmePath ? <Text>{`readme: ${e.readmePath}`}</Text> : null}
 			{e.model ? <Text>{`model: ${e.model}`}</Text> : null}
 			<Text>{`path: ${e.path}`}</Text>
 			<Text>{`--- prompt ---`}</Text>
@@ -277,11 +334,18 @@ function InvokeResult({out}: {out: Extract<ExpertManagerOutput, {action: 'invoke
 	return (
 		<Box flexDirection="column">
 			<Text>
-				<Text color="green">✓</Text> Invoked{' '}
+				<Text color={out.status === 'rejected' ? 'yellow' : 'green'}>
+					{out.status === 'rejected' ? '⚠' : '✓'}
+				</Text>{' '}
+				{out.status === 'rejected' ? 'Rejected' : 'Invoked'}{' '}
 				<Text bold>{out.expertName}</Text>{' '}
 				<Text dimColor>{`(${out.expertType})`}</Text>{' '}
+				{out.teamName ? (
+					<Text dimColor>{`team=${out.teamName} members=${out.memberCount ?? '?'} `}</Text>
+				) : null}
 				<Text>{`(${out.durationMs}ms, agentId=${out.agentId})`}</Text>
 			</Text>
+			{out.reason ? <Text color="yellow">{`reason: ${out.reason}`}</Text> : null}
 			<Text>{out.content || '(no output)'}</Text>
 		</Box>
 	)

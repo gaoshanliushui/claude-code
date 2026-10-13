@@ -1,6 +1,8 @@
 import {feature} from 'bun:bundle'
 import memoize from 'lodash-es/memoize.js'
-import {basename} from 'path'
+import {basename, join} from 'path'
+import {existsSync} from 'fs'
+import {readFile} from 'fs/promises'
 import type {SettingSource} from 'src/utils/settings/constants.js'
 import {z} from 'zod/v4'
 import {isAutoMemoryEnabled} from '../../memdir/paths.js'
@@ -20,7 +22,11 @@ import {
 	parseEffortValue,
 } from '../../utils/effort.js'
 import {isEnvTruthy} from '../../utils/envUtils.js'
-import {parsePositiveIntFromFrontmatter} from '../../utils/frontmatterParser.js'
+import {
+	coerceDescriptionToString,
+	parseFrontmatter,
+	parsePositiveIntFromFrontmatter,
+} from '../../utils/frontmatterParser.js'
 import {lazySchema} from '../../utils/lazySchema.js'
 import {logError} from '../../utils/log.js'
 import {
@@ -370,28 +376,54 @@ export const getAgentDefinitionsWithOverrides = memoize(
 			const {listExperts} = await import(
 				'../ExpertManagerTool/expertStorage.js'
 			)
-			const expertAgents = await listExperts(undefined, 'agent')
-			const expertDefs: AgentDefinition[] = expertAgents.map(expert => {
-				const description =
-					typeof expert.description === 'string'
-						? expert.description
-						: (expert.description as {en?: string; zh?: string} | undefined)
-								?.en ??
-							(expert.description as {en?: string; zh?: string} | undefined)
-								?.zh ??
-							`Custom expert "${expert.name}"`
-				return {
-					agentType: `expert:${expert.name}`,
-					whenToUse: description,
-					tools: ['*'],
-					source: 'userSettings', // passes isCustomAgent() at spawnMultiAgent.ts:881
-					baseDir: expert.path,
-					getSystemPrompt: () => expert.prompt,
-					model: expert.model ?? 'inherit',
-					description,
-					omitClaudeMd: false,
+			const allExperts = await listExperts(undefined, 'all')
+			// Index of already-registered agent-types to dedupe later
+			const registeredAgentTypes = new Set<string>()
+
+			// 1. Register agent-type experts (and team leads for team experts
+			//    when they're not declared as separate agent-type experts).
+			const agentExperts = allExperts.filter(e => e.expertType === 'agent')
+			const agentDefs: AgentDefinition[] = await Promise.all(
+				agentExperts.map(async expert => buildExpertDefinition(expert)),
+			)
+			for (const d of agentDefs) registeredAgentTypes.add(d.agentType)
+
+			// 2. Register team-type experts' leads as `expert:<team-name>`.
+			//    This is the leader's agentType — when the team is invoked with
+			//    runtime='team', the leader is the current process, not a
+			//    sub-agent. We register it so other tools (Agent, etc.) can
+			//    reference it. (The leader's prompt is delivered as guidance
+			//    via the invoke tool result, not as a sub-agent spawn.)
+			const teamExperts = allExperts.filter(e => e.expertType === 'team')
+			const teamLeadDefs: AgentDefinition[] = await Promise.all(
+				teamExperts.map(async expert => buildTeamLeadDefinition(expert)),
+			)
+			for (const d of teamLeadDefs) registeredAgentTypes.add(d.agentType)
+
+			// 3. Register team members as `expert:<team-name>:<member-id>` so
+			//    the lead can spawn them via Agent tool. WorkBuddy convention:
+			//    each member's .md is inside the team's agents/ dir and is
+			//    referenceable from the lead's SOP via its member-id.
+			const teamMemberDefs: AgentDefinition[] = []
+			for (const team of teamExperts) {
+				for (const member of team.members ?? []) {
+					const memberId = member.id ?? member.agentName
+					if (!memberId) continue
+					const agentType = `expert:${team.name}:${memberId}`
+					if (registeredAgentTypes.has(agentType)) continue
+					const def = await buildTeamMemberDefinition(team, memberId)
+					if (def) {
+						teamMemberDefs.push(def)
+						registeredAgentTypes.add(def.agentType)
+					}
 				}
-			})
+			}
+
+			const expertDefs: AgentDefinition[] = [
+				...agentDefs,
+				...teamLeadDefs,
+				...teamMemberDefs,
+			]
 
 			const allAgentsList: AgentDefinition[] = [
 				...builtInAgents,
@@ -433,6 +465,126 @@ export const getAgentDefinitionsWithOverrides = memoize(
 export function clearAgentDefinitionsCache(): void {
 	getAgentDefinitionsWithOverrides.cache.clear?.()
 	clearPluginAgentCache()
+}
+
+// ---------------------------------------------------------------------------
+// Expert → CustomAgentDefinition bridge
+// ---------------------------------------------------------------------------
+
+/** Read frontmatter from an expert's .md file. Returns maxTurns and
+ *  description if present in the frontmatter. Tolerates missing files. */
+async function readExpertFrontmatter(
+	mdPath: string | undefined,
+): Promise<{maxTurns?: number; description?: string; body?: string}> {
+	if (!mdPath || !existsSync(mdPath)) return {}
+	try {
+		const raw = await readFile(mdPath, 'utf-8')
+		const {frontmatter, content} = parseFrontmatter(raw, mdPath)
+		const maxTurns = parsePositiveIntFromFrontmatter(frontmatter['maxTurns'])
+		const description = coerceDescriptionToString(frontmatter['description'])
+		return {
+			...(maxTurns !== undefined ? {maxTurns} : {}),
+			...(description ? {description} : {}),
+			body: content,
+		}
+	} catch {
+		return {}
+	}
+}
+
+/** Pick the i18n string value, preferring zh (CJK-friendly). */
+function pickI18n(
+	v: string | {en?: string; zh?: string} | undefined,
+): string {
+	if (typeof v === 'string') return v
+	return v?.en ?? v?.zh ?? ''
+}
+
+/** Resolve an expert's .md path: WorkBuddy team lead (`<team-name>-team-lead.md`)
+ *  first, then legacy `<slug>.md`. */
+function resolveExpertMdPath(expert: {
+	path: string
+	name: string
+	expertType: 'agent' | 'team'
+	leadFile?: string
+}): string {
+	if (expert.leadFile && existsSync(expert.leadFile)) return expert.leadFile
+	const legacy = join(expert.path, 'agents', `${expert.name}.md`)
+	if (existsSync(legacy)) return legacy
+	return expert.leadFile ?? legacy
+}
+
+/** Build an AgentDefinition for an agent-type expert. The agentType is
+ *  `expert:<slug>`; the system prompt is the expert's stored prompt. */
+async function buildExpertDefinition(expert: {
+	name: string
+	path: string
+	expertType: 'agent' | 'team'
+	prompt: string
+	model?: string
+	description: string | {en?: string; zh?: string}
+	leadFile?: string
+}): Promise<AgentDefinition> {
+	const mdPath = resolveExpertMdPath(expert)
+	const fm = await readExpertFrontmatter(mdPath)
+	const description = fm.description ?? pickI18n(expert.description) ?? `Custom expert "${expert.name}"`
+	return {
+		agentType: `expert:${expert.name}`,
+		whenToUse: description,
+		tools: ['*'],
+		source: 'userSettings',
+		baseDir: expert.path,
+		getSystemPrompt: () => expert.prompt,
+		model: expert.model ?? 'inherit',
+		description,
+		omitClaudeMd: false,
+		...(fm.maxTurns !== undefined ? {maxTurns: fm.maxTurns} : {}),
+	}
+}
+
+/** Build an AgentDefinition for a team expert's lead. The agentType is
+ *  `expert:<team-name>`; the system prompt is the team's stored lead prompt.
+ *  Note: when the team is invoked with runtime='team', the leader IS the
+ *  current process, not a sub-agent — this registration exists so other
+ *  tools (Agent, etc.) can reference the lead's agentType. */
+async function buildTeamLeadDefinition(team: {
+	name: string
+	path: string
+	prompt: string
+	model?: string
+	description: string | {en?: string; zh?: string}
+	leadFile?: string
+}): Promise<AgentDefinition> {
+	return buildExpertDefinition({...team, expertType: 'team'})
+}
+
+/** Build an AgentDefinition for a team member. The agentType is
+ *  `expert:<team-name>:<member-id>`. Returns null if the member has no
+ *  stored .md file. */
+async function buildTeamMemberDefinition(
+	team: {
+		name: string
+		path: string
+	},
+	memberId: string,
+): Promise<AgentDefinition | null> {
+	const memberMdPath = join(team.path, 'agents', `${memberId}.md`)
+	if (!existsSync(memberMdPath)) return null
+	const fm = await readExpertFrontmatter(memberMdPath)
+	if (!fm.body) return null
+	const description = fm.description ?? `Member "${memberId}" of team "${team.name}"`
+	return {
+		agentType: `expert:${team.name}:${memberId}`,
+		whenToUse: description,
+		tools: ['*'],
+		source: 'userSettings',
+		baseDir: team.path,
+		getSystemPrompt: () => fm.body!,
+		model: 'inherit',
+		description,
+		omitClaudeMd: false,
+		...(fm.maxTurns !== undefined ? {maxTurns: fm.maxTurns} : {}),
+	}
 }
 
 /**

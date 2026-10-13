@@ -12,6 +12,8 @@
  * sub-agents via Promise.all. We then synthesize a single response by
  * concatenating member outputs.
  */
+import {existsSync} from 'fs'
+import {join} from 'path'
 import type {CanUseToolFn} from '../../hooks/useCanUseTool.js'
 import {runAgent} from '../../tools/AgentTool/runAgent.js'
 import type {AgentDefinition} from '../../tools/AgentTool/loadAgentsDir.js'
@@ -289,6 +291,27 @@ function buildCoordinatorGuidance(
 				: `- ${m.name} (spawn failed)`,
 		)
 		.join('\n')
+	// Build a per-member agentType hint so the leader knows which subagent_type
+	// to use when calling the Agent tool to re-spawn or address a member.
+	const teamInternalMembers = (team.members ?? []).map(m => {
+		const memberId = m.id ?? m.agentName ?? ''
+		const isInternal = memberId
+			? (team.agentFiles?.has(memberId) ?? false) ||
+				existsSync(join(team.path, 'agents', `${memberId}.md`))
+			: false
+		const agentType = isInternal
+			? `expert:${team.name}:${memberId}`
+			: `expert:${m.agentName ?? memberId}`
+		return `  - ${memberId}: \`subagent_type: "${agentType}"\``
+	})
+	const agentTypeHints = teamInternalMembers.length > 0
+		? [
+				'',
+				'### Spawn / re-spawn a member via the Agent tool',
+				'To talk to a member, use the Agent tool with the agentType below:',
+				...teamInternalMembers,
+			]
+		: []
 	const teamPrompt = team.prompt.trim()
 	return [
 		`## Team: ${team.name} (${teamName})`,
@@ -298,6 +321,7 @@ function buildCoordinatorGuidance(
 		'',
 		'### Members spawned',
 		memberList,
+		...agentTypeHints,
 		'',
 		'### Original task',
 		taskPrompt,
@@ -349,24 +373,61 @@ export async function runExpertTeamReal(
 	)
 
 	// 2. Spawn one teammate per member in parallel.
+	//
+	//    Two patterns are supported:
+	//    - Legacy: each member is also a separate agent-type expert. We spawn
+	//      via `subagent_type: 'expert:<member-name>'` (the member's own
+	//      expert registration).
+	//    - WorkBuddy: members are defined inside the team's `agents/<id>.md`
+	//      and registered as `expert:<team-name>:<member-id>`. We prefer this
+	//      when the team's own .md exists.
 	const memberResults: Array<{name: string; teammateId: string | null}> = []
 	await Promise.all(
 		(team.members ?? []).map(async member => {
-			const memberExpert = await readExpert(member.agentName, scope)
-			if (!memberExpert || memberExpert.expertType !== 'agent') {
+			const memberId = member.id ?? member.agentName
+			if (!memberId) {
 				logForDebugging(
-					`Team member "${member.agentName}" missing or wrong type; skipping`,
+					`Team member has no id or agentName; skipping`,
 					{level: 'warn'},
 				)
 				return
 			}
+
+			// Determine agentType. Prefer the WorkBuddy-internal name; fall
+			// back to the separate expert's name.
+			let subagentType: string | null = null
+			let displayName: string = memberId
+			const internalMdPath = join(
+				team.path,
+				'agents',
+				`${memberId}.md`,
+			)
+			if (existsSync(internalMdPath)) {
+				subagentType = `expert:${team.name}:${memberId}`
+				displayName = memberId
+			} else {
+				const memberExpert = await readExpert(member.agentName, scope)
+				if (memberExpert && memberExpert.expertType === 'agent') {
+					subagentType = `expert:${memberExpert.name}`
+					displayName = memberExpert.agentName
+				}
+			}
+
+			if (!subagentType) {
+				logForDebugging(
+					`Team member "${memberId}" has no agent definition; skipping`,
+					{level: 'warn'},
+				)
+				return
+			}
+
 			try {
 				const spawnResult = await AgentTool.call(
 					{
-						description: `Spawn teammate ${member.agentName}`,
+						description: `Spawn teammate ${displayName}`,
 						prompt: taskPrompt,
-						subagent_type: `expert:${memberExpert.name}`,
-						name: memberExpert.agentName,
+						subagent_type: subagentType,
+						name: displayName,
 						team_name: teamName,
 						run_in_background: false,
 					},
@@ -377,7 +438,7 @@ export async function runExpertTeamReal(
 					| {status?: string; teammate_id?: string}
 					| undefined
 				memberResults.push({
-					name: member.agentName,
+					name: displayName,
 					teammateId:
 						data?.status === 'teammate_spawned'
 							? (data.teammate_id ?? null)
@@ -385,10 +446,10 @@ export async function runExpertTeamReal(
 				})
 			} catch (err) {
 				logForDebugging(
-					`Failed to spawn teammate ${member.agentName}: ${err instanceof Error ? err.message : String(err)}`,
+					`Failed to spawn teammate ${displayName}: ${err instanceof Error ? err.message : String(err)}`,
 					{level: 'warn'},
 				)
-				memberResults.push({name: member.agentName, teammateId: null})
+				memberResults.push({name: displayName, teammateId: null})
 			}
 		}),
 	)

@@ -28,6 +28,18 @@ function displayNameText(d: unknown): string {
 	return '(unnamed)'
 }
 
+function i18nText(d: unknown): string {
+	if (typeof d === 'string') return d
+	if (d && typeof d === 'object') {
+		const obj = d as {en?: string; zh?: string}
+		const zh = obj.zh
+		const en = obj.en
+		if (zh && en) return `${zh} / ${en}`
+		return zh ?? en ?? ''
+	}
+	return ''
+}
+
 function truncate(s: string, n: number): string {
 	if (s.length <= n) return s
 	return s.slice(0, Math.max(0, n - 1)) + '…'
@@ -40,10 +52,11 @@ function ListView({onDone}: {onDone: LocalJSXCommandOnDone}) {
 			expertType: 'agent' | 'team'
 			displayName: unknown
 			description: string
-			tags: string[]
+			tags: Array<string | {en?: string; zh?: string}>
 			categoryId: string
 			scope: 'managed' | 'user' | 'project'
 			path: string
+			version?: string
 		}> | null
 	>(null)
 	const [error, setError] = React.useState<string | null>(null)
@@ -115,10 +128,15 @@ function ListView({onDone}: {onDone: LocalJSXCommandOnDone}) {
 						</Text>{' '}
 						<Text bold>/expert {e.name}</Text>{' '}
 						<Text dimColor>{`(${e.scope})`}</Text>
+						{'version' in e && e.version ? (
+							<Text dimColor>{` v${e.version}`}</Text>
+						) : null}
 					</Text>
 					<Text>{`    ${displayNameText(e.displayName)}`}</Text>
 					<Text dimColor>{`    ${truncate(e.description, 80)}`}</Text>
-					<Text dimColor>{`    tags=[${e.tags.join(', ')}]  category=${e.categoryId}`}</Text>
+					<Text dimColor>{`    tags=[${e.tags
+						.map(t => (typeof t === 'string' ? t : i18nText(t)))
+						.join(', ')}]  category=${e.categoryId}`}</Text>
 				</Box>
 			))}
 		</Box>

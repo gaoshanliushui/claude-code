@@ -5,9 +5,12 @@
  *   - plugin.json has all required fields
  *   - tags.length === 3, quickPrompts.length === 3
  *   - description: if it contains CJK characters, must be 40-50 chars
- *   - defaultInitPrompt === quickPrompts[0]
+ *   - defaultInitPrompt equals quickPrompts[0]
  *   - expertType=team requires non-empty members, each resolvable
  *   - .md frontmatter has agentName (non-empty), no body-level [TODO]s
+ *   - teamInfo (if present) has leadAgent and memberAgents
+ *   - teamInfo.leadAgent must be in members[]
+ *   - version (if present) is semver
  *
  * Returns a list of structured errors so callers can surface them in the
  * tool_result / UI without throwing.
@@ -16,6 +19,7 @@ import {readExpert} from './expertStorage.js'
 import type {
 	Expert,
 	ExpertScope,
+	I18nString,
 	ValidationError,
 	ValidationResult,
 } from './types.js'
@@ -35,6 +39,21 @@ function cjkCharCount(s: string): number {
 		}
 	}
 	return count
+}
+
+/** Extract a string from an i18n value (zh preferred, en fallback, first non-empty). */
+function i18nToString(v: I18nString | undefined): string {
+	if (!v) return ''
+	if (typeof v === 'string') return v
+	return v.zh ?? v.en ?? ''
+}
+
+/** Pick the i18n text that's most likely to satisfy the CJK 40-50 char rule.
+ *  For WorkBuddy-shaped {en, zh} fields, prefer zh when present. */
+function pickDescriptionForCjkCheck(v: I18nString | undefined): string {
+	if (!v) return ''
+	if (typeof v === 'string') return v
+	return v.zh ?? v.en ?? ''
 }
 
 /** Validate an already-loaded Expert object. Pure function — does no I/O. */
@@ -60,6 +79,22 @@ export function validateExpertObject(expert: Expert): ValidationResult {
 		errors.push({field: 'categoryId', message: 'categoryId is required'})
 	}
 
+	// version (optional, but if present must be semver)
+	if (expert.version !== undefined && !/^\d+\.\d+\.\d+/.test(expert.version)) {
+		errors.push({
+			field: 'version',
+			message: `version must be semver (got "${expert.version}")`,
+		})
+	}
+
+	// author (optional, but if present must have a name)
+	if (expert.author && !expert.author.name) {
+		errors.push({
+			field: 'author',
+			message: 'author.name is required when author is set',
+		})
+	}
+
 	// tags
 	if (!Array.isArray(expert.tags) || expert.tags.length !== 3) {
 		errors.push({
@@ -78,10 +113,12 @@ export function validateExpertObject(expert: Expert): ValidationResult {
 
 	// defaultInitPrompt matches quickPrompts[0]
 	if (expert.defaultInitPrompt) {
-		const first = Array.isArray(expert.quickPrompts)
+		const firstRaw = Array.isArray(expert.quickPrompts)
 			? expert.quickPrompts[0]
 			: undefined
-		if (first !== undefined && expert.defaultInitPrompt !== first) {
+		const first = i18nToString(firstRaw)
+		const def = i18nToString(expert.defaultInitPrompt)
+		if (first && def && def !== first) {
 			errors.push({
 				field: 'defaultInitPrompt',
 				message: 'defaultInitPrompt must equal quickPrompts[0]',
@@ -94,7 +131,8 @@ export function validateExpertObject(expert: Expert): ValidationResult {
 		})
 	}
 
-	// description length rule (CJK only — English text has no length rule)
+	// description length rule (CJK only — English text has no length rule).
+	// For i18n description fields, prefer zh (most likely to have CJK).
 	if (typeof expert.description === 'string') {
 		const cjk = cjkCharCount(expert.description)
 		if (cjk > 0 && (cjk < 40 || cjk > 50)) {
@@ -104,10 +142,19 @@ export function validateExpertObject(expert: Expert): ValidationResult {
 			})
 		}
 	} else {
-		errors.push({
-			field: 'description',
-			message: 'description is required',
-		})
+		// i18n object
+		const desc = pickDescriptionForCjkCheck(expert.description)
+		if (!desc) {
+			errors.push({field: 'description', message: 'description is required'})
+		} else {
+			const cjk = cjkCharCount(desc)
+			if (cjk > 0 && (cjk < 40 || cjk > 50)) {
+				errors.push({
+					field: 'description',
+					message: `description contains ${cjk} CJK chars; must be 40-50 (WorkBuddy rule)`,
+				})
+			}
+		}
 	}
 
 	// team-specific
@@ -119,11 +166,58 @@ export function validateExpertObject(expert: Expert): ValidationResult {
 			})
 		} else {
 			for (const [i, member] of expert.members.entries()) {
-				if (!member.agentName) {
+				if (!member.id && !member.agentName) {
 					errors.push({
-						field: `members[${i}].agentName`,
-						message: 'member.agentName is required',
+						field: `members[${i}]`,
+						message: 'member must have at least one of id or agentName',
 					})
+				}
+			}
+		}
+
+		// teamInfo (optional, but if present must be self-consistent)
+		if (expert.teamInfo) {
+			if (!expert.teamInfo.leadAgent) {
+				errors.push({
+					field: 'teamInfo.leadAgent',
+					message: 'teamInfo.leadAgent is required when teamInfo is set',
+				})
+			}
+			if (
+				!Array.isArray(expert.teamInfo.memberAgents) ||
+				expert.teamInfo.memberAgents.length === 0
+			) {
+				errors.push({
+					field: 'teamInfo.memberAgents',
+					message: 'teamInfo.memberAgents must be a non-empty array',
+				})
+			}
+			// leadAgent should be findable in members[]
+			if (expert.teamInfo.leadAgent && Array.isArray(expert.members)) {
+				const found = expert.members.some(
+					m =>
+						m.id === expert.teamInfo!.leadAgent ||
+						m.agentName === expert.teamInfo!.leadAgent,
+				)
+				if (!found) {
+					errors.push({
+						field: 'teamInfo.leadAgent',
+						message: `teamInfo.leadAgent "${expert.teamInfo.leadAgent}" not found in members[]`,
+					})
+				}
+			}
+			// all memberAgents should be findable in members[]
+			if (Array.isArray(expert.teamInfo.memberAgents) && Array.isArray(expert.members)) {
+				for (const id of expert.teamInfo.memberAgents) {
+					const found = expert.members.some(
+						m => m.id === id || m.agentName === id,
+					)
+					if (!found) {
+						errors.push({
+							field: 'teamInfo.memberAgents',
+							message: `memberAgent "${id}" not found in members[]`,
+						})
+					}
 				}
 			}
 		}

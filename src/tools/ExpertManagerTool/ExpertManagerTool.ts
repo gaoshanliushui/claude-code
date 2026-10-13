@@ -258,6 +258,8 @@ export const ExpertManagerTool: Tool<
 							categoryId: e.categoryId,
 							scope: e.source,
 							path: e.path,
+							...(e.version ? {version: e.version} : {}),
+							...(e.avatar ? {avatar: e.avatar} : {}),
 						})),
 					},
 				}
@@ -284,11 +286,32 @@ export const ExpertManagerTool: Tool<
 								quickPrompts: expert.quickPrompts,
 								defaultInitPrompt: expert.defaultInitPrompt,
 								...(expert.members ? {members: expert.members} : {}),
+								// WorkBuddy optional fields
+								...(expert.version ? {version: expert.version} : {}),
+								...(expert.author ? {author: expert.author} : {}),
+								...(expert.displayDescription
+									? {displayDescription: expert.displayDescription}
+									: {}),
+								...(expert.avatar ? {avatar: expert.avatar} : {}),
+								...(expert.plugin ? {plugin: expert.plugin} : {}),
+								...(expert.teamInfo ? {teamInfo: expert.teamInfo} : {}),
+								...(expert.agents ? {agents: expert.agents} : {}),
 							},
 							prompt: expert.prompt,
 							...(expert.model ? {model: expert.model} : {}),
 							scope: expert.source,
 							path: expert.path,
+							// WorkBuddy file metadata
+							...(expert.leadFile ? {leadFile: expert.leadFile} : {}),
+							...(expert.agentFiles
+								? {
+										agentFiles: Array.from(expert.agentFiles.entries()).map(
+											([id, path]) => ({id, path}),
+										),
+									}
+								: {}),
+							...(expert.avatarPath ? {avatarPath: expert.avatarPath} : {}),
+							...(expert.readmePath ? {readmePath: expert.readmePath} : {}),
 						},
 					},
 				}
@@ -310,6 +333,14 @@ export const ExpertManagerTool: Tool<
 					prompt: input.prompt,
 					promptFrontmatter: {},
 					...(input.model ? {model: input.model} : {}),
+					// WorkBuddy optional fields
+					...(input.version ? {version: input.version} : {}),
+					...(input.author ? {author: input.author} : {}),
+					...(input.displayDescription
+						? {displayDescription: input.displayDescription}
+						: {}),
+					...(input.avatar ? {avatar: input.avatar} : {}),
+					...(input.plugin ? {plugin: input.plugin} : {}),
 					// These get overwritten by writeExpert, but TS requires them.
 					source: 'user',
 					path: '',
@@ -339,10 +370,20 @@ export const ExpertManagerTool: Tool<
 
 			case 'create_team': {
 				const defaultInitPrompt = input.quickPrompts[0] ?? ''
-				const members: TeamMember[] = [
-					{agentName: input.leader_agent, role: 'leader'},
-					...input.member_agents.map(m => ({agentName: m})),
-				]
+				// WorkBuddy naming convention: lead's slug is `<team-name>-team-lead`.
+				// The lead's .md file in agents/ is `<leadId>.md`.
+				const leadId = `${input.name}-team-lead`
+				const leadMember: TeamMember = {
+					id: leadId,
+					agentName: input.leader_agent,
+					role: 'lead',
+				}
+				const memberMembers: TeamMember[] = input.member_agents.map(m => ({
+					id: m,
+					agentName: m,
+					role: 'member' as const,
+				}))
+				const members: TeamMember[] = [leadMember, ...memberMembers]
 				const leader = await readExpert(input.leader_agent, scope)
 				const prompt = leader?.prompt ?? 'You are the team lead.'
 				const expert: Expert = {
@@ -359,6 +400,22 @@ export const ExpertManagerTool: Tool<
 					prompt,
 					promptFrontmatter: {},
 					members,
+					// WorkBuddy fields
+					teamInfo: {
+						leadAgent: leadId,
+						memberAgents: input.member_agents,
+					},
+					agents: [
+						`./agents/${leadId}.md`,
+						...input.member_agents.map(m => `./agents/${m}.md`),
+					],
+					...(input.version ? {version: input.version} : {}),
+					...(input.author ? {author: input.author} : {}),
+					...(input.displayDescription
+						? {displayDescription: input.displayDescription}
+						: {}),
+					...(input.avatar ? {avatar: input.avatar} : {}),
+					...(input.plugin ? {plugin: input.plugin} : {}),
 					source: 'user',
 					path: '',
 				}
@@ -404,6 +461,10 @@ export const ExpertManagerTool: Tool<
 					existing.description = input.description
 					changedFields.push('description')
 				}
+				if (input.displayDescription !== undefined) {
+					existing.displayDescription = input.displayDescription
+					changedFields.push('displayDescription')
+				}
 				if (input.categoryId !== undefined) {
 					existing.categoryId = input.categoryId
 					changedFields.push('categoryId')
@@ -427,6 +488,23 @@ export const ExpertManagerTool: Tool<
 				if (input.members !== undefined) {
 					existing.members = input.members
 					changedFields.push('members')
+				}
+				// WorkBuddy fields
+				if (input.version !== undefined) {
+					existing.version = input.version
+					changedFields.push('version')
+				}
+				if (input.author !== undefined) {
+					existing.author = input.author
+					changedFields.push('author')
+				}
+				if (input.avatar !== undefined) {
+					existing.avatar = input.avatar
+					changedFields.push('avatar')
+				}
+				if (input.teamInfo !== undefined) {
+					existing.teamInfo = input.teamInfo
+					changedFields.push('teamInfo')
 				}
 
 				const validation = validateExpertObject(existing)
