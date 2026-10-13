@@ -28,11 +28,12 @@
 
 | 文件 | 用途 | 适用读者 |
 |---|---|---|
-| **本文档** [`README.md`](./README.md) | 索引 + 一句话总览 | 任何人 |
-| [`claude-code-architecture.md`](./claude-code-architecture.md) | Claude Code（本仓库）的功能档案 | 想深入了解本仓库能力清单的人 |
-| [`openworkbuddy-architecture.md`](./openworkbuddy-architecture.md) | OpenWorkBuddy 的功能档案 | 想深入了解 WorkBuddy 能力清单的人 |
-| [`side-by-side.md`](./side-by-side.md) | 维度并列对照 + 借鉴清单 | 决定"借鉴什么"的人 |
-| [`feature-matrix.md`](./feature-matrix.md) | 高密度能力勾稽表 | 想速查"哪个能做"的人 |
+| **本文档** [`../../README.md`](README.md) | 索引 + 一句话总览 | 任何人 |
+| [`claude-code-architecture.md`](claude-code-architecture.md) | Claude Code（本仓库）的功能档案 | 想深入了解本仓库能力清单的人 |
+| [`openworkbuddy-architecture.md`](openworkbuddy-architecture.md) | OpenWorkBuddy 的功能档案 | 想深入了解 WorkBuddy 能力清单的人 |
+| [`side-by-side.md`](side-by-side.md) | 维度并列对照 + 借鉴清单 | 决定"借鉴什么"的人 |
+| [`feature-matrix.md`](feature-matrix.md) | 高密度能力勾稽表 | 想速查"哪个能做"的人 |
+| [`../agent/expert-team-vs-teamcreate.md`](../agent/expert-team-vs-teamcreate.md) | 自建 `ExpertManager.create_team` vs 原生 `TeamCreateTool` 同名异质对比 | 准备用 / 写这两套的人 |
 
 ---
 
@@ -81,10 +82,10 @@
 
 | 来源 | 内容 |
 |---|---|
-| 本仓库 `src/`、`packages/`、各 `docs/` | Claude Code 侧 |
-| 本仓库 `CLAUDE.md` | 反编译背景、构建信息、stub 提示 |
+| 本仓库 `../../src`、`packages/`、各 `docs/` | Claude Code 侧 |
+| 本仓库 `../../CLAUDE.md` | 反编译背景、构建信息、stub 提示 |
 | `/Users/zhouquan/project/ai/agent/general/openworkbuddy/` 整树 | OpenWorkBuddy 侧 |
-| openworkbuddy `README.md` + `docs/own/` 各文档 | 中文 OA 产品定位 |
+| openworkbuddy `../../README.md` + `docs/own/` 各文档 | 中文 OA 产品定位 |
 | openworkbuddy `config.example.json` | 配置 schema 真相 |
 | openworkbuddy `experts.json` | 42 expert + 10 team 列表 |
 | openworkbuddy `skills/` 41 个 `skill.md` | skill 实际清单 |
@@ -93,10 +94,10 @@
 
 ## 5. 阅读路径建议
 
-1. **产品/PM/决策者**：先看本 README 的 §0 和 [`side-by-side.md`](./side-by-side.md) 的 §14（关键差异要点一句话）。
-2. **架构师/技术负责人**：看 [`feature-matrix.md`](./feature-matrix.md)，再按需进入 [`claude-code-architecture.md`](./claude-code-architecture.md) 或 [`openworkbuddy-architecture.md`](./openworkbuddy-architecture.md) 查细节。
-3. **具体借鉴/迁移者**：直接看 [`side-by-side.md`](./side-by-side.md) §15-16 的借鉴清单，按"价值 + 难度"挑。
-4. **审计/安全**：看 [`feature-matrix.md`](./feature-matrix.md) §6（权限 / 安全）和 §8（自进化）。
+1. **产品/PM/决策者**：先看本 README 的 §0 和 [`side-by-side.md`](side-by-side.md) 的 §14（关键差异要点一句话）。
+2. **架构师/技术负责人**：看 [`feature-matrix.md`](feature-matrix.md)，再按需进入 [`claude-code-architecture.md`](claude-code-architecture.md) 或 [`openworkbuddy-architecture.md`](openworkbuddy-architecture.md) 查细节。
+3. **具体借鉴/迁移者**：直接看 [`side-by-side.md`](side-by-side.md) §15-16 的借鉴清单，按"价值 + 难度"挑。
+4. **审计/安全**：看 [`feature-matrix.md`](feature-matrix.md) §6（权限 / 安全）和 §8（自进化）。
 5. **媒体/AI 应用开发者**：重点关注 OpenWorkBuddy §2.3 媒体类工具 + skill 库。
 
 ---
@@ -167,15 +168,15 @@
 
 | 优先级 | 设计 | 关键代码 |
 |---|---|---|
-| ★★★ | `/rewind` + 文件历史快照 | `src/utils/fileHistory.ts` |
-| ★★★ | Hooks（pre/post tool）通用框架 | `src/utils/hooks.ts` |
-| ★★ | `--json-schema` Zod 结构化输出 | `src/main.tsx` |
-| ★★ | `from-pr` / `cross-project resume` | `src/utils/crossProjectResume.ts` |
-| ★★ | Bedrock/Vertex/Foundry 多云支持 | `src/services/api/client.ts` |
-| ★ | `--output-format stream-json` | `src/main.tsx` |
-| ★ | LSP 集成 | `src/services/lsp/` |
+| ★★★ | `/rewind` + 文件历史快照 | `../../src/utils/fileHistory.ts` |
+| ★★★ | Hooks（pre/post tool）通用框架 | `../../src/utils/hooks.ts` |
+| ★★ | `--json-schema` Zod 结构化输出 | `../../src/main.tsx` |
+| ★★ | `from-pr` / `cross-project resume` | `../../src/utils/crossProjectResume.ts` |
+| ★★ | Bedrock/Vertex/Foundry 多云支持 | `../../src/services/api/client.ts` |
+| ★ | `--output-format stream-json` | `../../src/main.tsx` |
+| ★ | LSP 集成 | `../../src/services/lsp` |
 | ★ | `--worktree` 开发会话隔离 | `src/utils/worktree/` |
-| ★ | MCP 多传输（WebSocket/InProcess/SdkControl） | `src/services/mcp/` |
+| ★ | MCP 多传输（WebSocket/InProcess/SdkControl） | `../../src/services/mcp` |
 
 ---
 
