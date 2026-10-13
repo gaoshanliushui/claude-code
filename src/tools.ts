@@ -54,7 +54,6 @@ const SubscribePRTool = feature('KAIROS_GITHUB_WEBHOOKS')
 	? require('./tools/SubscribePRTool/SubscribePRTool.js').SubscribePRTool
 	: null
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
-import {ExpertManagerTool} from './tools/ExpertManagerTool/ExpertManagerTool.js'
 import {TaskOutputTool} from './tools/TaskOutputTool/TaskOutputTool.js'
 import {WebSearchTool} from './tools/WebSearchTool/WebSearchTool.js'
 import {TodoWriteTool} from './tools/TodoWriteTool/TodoWriteTool.js'
@@ -200,7 +199,6 @@ export function getAllBaseTools(): Tools {
 	return [
 		AgentTool,
 		TaskOutputTool,
-		ExpertManagerTool,
 		BashTool,
 		// Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
 		// trick as ripgrep). When available, find/grep in Claude's shell are aliased

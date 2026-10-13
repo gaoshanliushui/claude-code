@@ -113,7 +113,8 @@
       "Read(//Users/zhouquan/**)",
       "WebFetch(domain:herdr.dev)",
       "ExpertManager",
-      "Bash(~/.kimi-webbridge/bin/kimi-webbridge start:*)"
+      "Bash(~/.kimi-webbridge/bin/kimi-webbridge start:*)",
+      "Bash(python3 scripts/init_expert.py investment-research-team --type team --path \"$HOME/.claude/experts\")"
     ]
   }
 }

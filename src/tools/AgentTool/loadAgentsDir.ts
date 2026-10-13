@@ -362,19 +362,22 @@ export const getAgentDefinitionsWithOverrides = memoize(
 
 			const builtInAgents = getBuiltInAgents()
 
-			// Bridge: register every agent-type expert from ExpertManagerTool
-			// as a CustomAgentDefinition. This makes `expert:<slug>` a valid
-			// subagent_type for the Agent tool, and when used in a team context
-			// (with `name` and `team_name`), it spawns a real teammate with
-			// SendMessage / TeamCreate / TeamDelete / Task* auto-injected by
-			// runInProcessTeammate (see inProcessRunner.ts:975-1001).
+			// Bridge: discover expert packages via src/utils/experts/ and
+			// register each as a CustomAgentDefinition. This makes
+			// `expert:<slug>` a valid subagent_type for the Agent tool, and
+			// when used in a team context (with `name` and `team_name`), it
+			// spawns a real teammate with SendMessage / TeamCreate /
+			// TeamDelete / Task* auto-injected by runInProcessTeammate (see
+			// inProcessRunner.ts:975-1001). Expert creation/editing lives
+			// in the `expert-manager` skill (~/.claude/skills/expert-manager/);
+			// this CLI only consumes the resulting on-disk packages.
 			//
 			// Team-type experts are intentionally NOT registered here — the
 			// leader is the current process whose system prompt cannot be
 			// changed mid-session. Their members (which must be agent-type)
 			// are registered automatically when they exist.
 			const {listExperts} = await import(
-				'../ExpertManagerTool/expertStorage.js'
+				'../../utils/experts/index.js'
 			)
 			const allExperts = await listExperts(undefined, 'all')
 			// Index of already-registered agent-types to dedupe later

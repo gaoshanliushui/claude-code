@@ -34,10 +34,10 @@
 import {existsSync} from 'fs'
 import {readFile, readdir, stat} from 'fs/promises'
 import {join} from 'path'
-import {parseFrontmatter, parsePositiveIntFromFrontmatter, coerceDescriptionToString} from '../../../utils/frontmatterParser.js'
-import {logForDebugging} from '../../../utils/debug.js'
-import type {Expert, ExpertMeta, MemberAgentInfo} from '../types.js'
-import {expertMetaSchema} from '../types.js'
+import {parseFrontmatter, parsePositiveIntFromFrontmatter, coerceDescriptionToString} from '../frontmatterParser.js'
+import {logForDebugging} from '../debug.js'
+import type {Expert, ExpertMeta, MemberAgentInfo, ExpertRoot} from './types.js'
+import {expertMetaSchema} from './types.js'
 
 /** Read and JSON-parse plugin.json. Tries `.codebuddy-plugin/plugin.json`
  *  first (WorkBuddy), falls back to root `plugin.json` (legacy). */
@@ -264,7 +264,7 @@ async function findReadme(expertDir: string): Promise<string | undefined> {
 export async function parseExpertDir(
 	expertDir: string,
 	slug: string,
-	source: 'managed' | 'user' | 'project',
+	source: ExpertRoot,
 ): Promise<Expert | null> {
 	const result = await readPluginJson(expertDir)
 	if (!result) return null
